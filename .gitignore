@@ -1,0 +1,14 @@
+build/
+build_*/
+*.uf2
+*.elf
+*.bin
+*.map
+*.hex
+.cache/
+compile_commands.json
+.vscode/
+*.o
+*.a
+*.swp
+.DS_Store
