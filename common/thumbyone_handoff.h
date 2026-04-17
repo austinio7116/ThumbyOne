@@ -89,4 +89,15 @@ void thumbyone_handoff_request_lobby(void);
 void thumbyone_handoff_consume_if_present(uint8_t *workarea,
                                            uint32_t workarea_size);
 
+/* Re-apply the fast-QPI XIP config (M0_TIMING / M0_RCMD / M0_RFMT)
+ * that boot_stage2 would set on a cold boot. Needed after the
+ * SDK's flash_range_erase / flash_range_program call
+ * rom_flash_enter_cmd_xip internally, which resets QMI to a slow
+ * safe-mode read config.
+ *
+ * The library also calls this once on startup (priority-100
+ * constructor) so chained images don't inherit slow XIP from the
+ * bootrom's chain path. */
+void thumbyone_xip_fast_setup(void);
+
 #endif /* THUMBYONE_HANDOFF_H */

@@ -14,33 +14,94 @@
 #include "hardware/watchdog.h"
 #include "hardware/structs/watchdog.h"
 #include "hardware/structs/qmi.h"
+#include "hardware/regs/qmi.h"
+#include "hardware/regs/addressmap.h"
 #include "boot/picobin.h"
 #include "boot/picoboot_constants.h"
 
 
-/* ---- ATRANS slots 1..3 identity setup ----------------------------- */
+/* ---- Fast QPI XIP setup ------------------------------------------ */
 /*
- * rom_chain_image sets up QMI ATRANS slot 0 for the partition
- * it's launching, and leaves slots 1..3 at SIZE=0. Any read in
- * slots 1..3's windows (XIP 0x10400000..0x11000000) then causes
- * a bus fault.
+ * On cold boot the RP2350 bootrom runs boot2 from the first 256
+ * bytes of flash, which writes QMI M0_{TIMING,RCMD,RFMT} to
+ * configure fast quad-SPI XIP (clkdiv=2, EBh-read with
+ * continuous-read A0h mode bits, QPI address/data widths).
  *
- * Every ThumbyOne slot needs the shared FAT (at physical
- * 0x660000+, in slot 1) and potentially the P8 active-cart
- * scratch (0x620000, also in slot 1). ROMs in the FAT can live
- * anywhere in the 9.6 MB FAT region (up to physical 0x1000000,
- * in slots 1/2/3). And DOOM's get_end_of_flash scan walks the
- * full XIP window looking for its image tail.
+ * rom_chain_image does NOT re-run boot2 in the chained image.
+ * It also reshapes ATRANS, and in the process appears to leave
+ * QMI reverted to a safer/slower read config — observed as
+ * ~2x slowdown of chained images vs the same firmware cold-
+ * booted at the same clock. Same registers are also clobbered
+ * by SDK flash_range_erase / flash_range_program (they call
+ * rom_flash_enter_cmd_xip internally which sets slow cmd-XIP
+ * mode).
  *
- * Simplest unified fix: set slots 1..3 to identity — logical
- * 0x10400000..0x11000000 maps to physical 0x400000..0x1000000.
- * Slot 0 is left alone (bootrom set it for our partition; we
- * rely on that mapping for our own code).
- *
- * Constructor priority 101 — runs before main, before any user
- * constructors (slot code) or flash operations. */
-__attribute__((constructor(101)))
-static void thumbyone_atrans_init(void) {
+ * Fix: write the fast-QPI values back. Must match
+ * pico-sdk/src/rp2350/boot_stage2/boot2_w25q080.S — these are
+ * the W25Q080 / W25Q16JV / AT25SF081 compatible values the
+ * Thumby Color ships with.
+ */
+
+#define TBYONE_FLASH_SPI_CLKDIV   2
+#define TBYONE_FLASH_SPI_RXDELAY  2
+#define TBYONE_CMD_READ_FAST_QPI  0xEB
+#define TBYONE_MODE_CONT_READ     0xA0
+#define TBYONE_WAIT_CYCLES        4
+
+#define TBYONE_M0_TIMING (                                         \
+    (1u                       << QMI_M0_TIMING_COOLDOWN_LSB) |     \
+    (TBYONE_FLASH_SPI_RXDELAY << QMI_M0_TIMING_RXDELAY_LSB)  |     \
+    (TBYONE_FLASH_SPI_CLKDIV  << QMI_M0_TIMING_CLKDIV_LSB))
+
+#define TBYONE_M0_RCMD (                                           \
+    (TBYONE_CMD_READ_FAST_QPI << QMI_M0_RCMD_PREFIX_LSB) |         \
+    (TBYONE_MODE_CONT_READ    << QMI_M0_RCMD_SUFFIX_LSB))
+
+#define TBYONE_M0_RFMT_WITH_PREFIX (                                            \
+    (QMI_M0_RFMT_PREFIX_WIDTH_VALUE_S << QMI_M0_RFMT_PREFIX_WIDTH_LSB) |        \
+    (QMI_M0_RFMT_ADDR_WIDTH_VALUE_Q   << QMI_M0_RFMT_ADDR_WIDTH_LSB)   |        \
+    (QMI_M0_RFMT_SUFFIX_WIDTH_VALUE_Q << QMI_M0_RFMT_SUFFIX_WIDTH_LSB) |        \
+    (QMI_M0_RFMT_DUMMY_WIDTH_VALUE_Q  << QMI_M0_RFMT_DUMMY_WIDTH_LSB)  |        \
+    (QMI_M0_RFMT_DATA_WIDTH_VALUE_Q   << QMI_M0_RFMT_DATA_WIDTH_LSB)   |        \
+    (QMI_M0_RFMT_PREFIX_LEN_VALUE_8   << QMI_M0_RFMT_PREFIX_LEN_LSB)   |        \
+    (QMI_M0_RFMT_SUFFIX_LEN_VALUE_8   << QMI_M0_RFMT_SUFFIX_LEN_LSB)   |        \
+    (TBYONE_WAIT_CYCLES               << QMI_M0_RFMT_DUMMY_LEN_LSB))
+
+/* Re-apply fast-XIP config. Can be called from a startup
+ * constructor or after any flash operation that resets QMI.
+ * Also exposed in the header for subprojects to call directly. */
+void thumbyone_xip_fast_setup(void) {
+    qmi_hw->m[0].timing = TBYONE_M0_TIMING;
+    qmi_hw->m[0].rcmd   = TBYONE_M0_RCMD;
+    qmi_hw->m[0].rfmt   = TBYONE_M0_RFMT_WITH_PREFIX;
+    /* Dummy read to transition flash into continuous-read mode
+     * (first transfer carries the 0xEB prefix; flash then latches
+     * the A0h mode bits so subsequent transfers skip the prefix). */
+    volatile uint32_t dummy = *(volatile uint32_t *)XIP_NOCACHE_NOALLOC_BASE;
+    (void)dummy;
+    /* Drop the command prefix — flash no longer wants it while
+     * in continuous-read mode. */
+    qmi_hw->m[0].rfmt = TBYONE_M0_RFMT_WITH_PREFIX
+                        & ~QMI_M0_RFMT_PREFIX_LEN_BITS;
+    __asm__ volatile("dsb" ::: "memory");
+}
+
+
+/* ---- ATRANS slots 1..3 identity setup ----------------------------- */
+
+__attribute__((constructor(100)))
+static void thumbyone_slot_init(void) {
+    /* 1. Restore fast QPI XIP (see thumbyone_xip_fast_setup
+     *    comment). This is the big perf fix — chained images
+     *    inherit slow XIP from the bootrom without it. */
+    thumbyone_xip_fast_setup();
+
+    /* 2. ATRANS slots 1..3 identity, so shared-FAT reads past
+     *    the partition's own window don't bus-fault.
+     *    rom_chain_image sets up slot 0 for our partition and
+     *    leaves slots 1..3 at SIZE=0. Every ThumbyOne slot
+     *    needs shared-FAT access; DOOM's get_end_of_flash scan
+     *    walks the full XIP window. */
     qmi_hw->atrans[1] = (0x400u << 16) | 0x400u;  /* 0x400000..0x800000 */
     qmi_hw->atrans[2] = (0x400u << 16) | 0x800u;  /* 0x800000..0xC00000 */
     qmi_hw->atrans[3] = (0x400u << 16) | 0xC00u;  /* 0xC00000..0x1000000 */
