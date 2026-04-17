@@ -103,34 +103,100 @@ def write_combined(out_path: Path, all_blocks):
     if total == 0:
         raise SystemExit("No blocks to combine.")
 
-    # Sanity: all blocks should share the family id (or none of them
-    # use the family-id flag). We don't enforce — RP2350 UF2s mix
-    # ARM_S (code) and DATA (picotool metadata) families by design.
-    families = {b["family"] for b in all_blocks if (b["flags"] & 0x2000)}
-    if len(families) > 1:
+    # BOOTSEL and picotool treat each family ID as a separate
+    # "sub-file" inside the UF2 container. block_no/num_blocks are
+    # numbered PER FAMILY, not globally. Preserve that — renumber
+    # within each family so the per-family sequences stay
+    # consistent across the combined file.
+    #
+    # Note on the DATA family (0xe48bff57): picotool emits it with
+    # num_blocks=2 but only ships 1 block per per-slot UF2 — the
+    # "other" block is a convention, not a literal missing block.
+    # Working firmware UF2s (e.g. ThumbyNES's) are the same. We
+    # preserve the claimed num_blocks verbatim for DATA and only
+    # renumber code families strictly.
+    families_present = {b["family"] for b in all_blocks if (b["flags"] & 0x2000)}
+    if len(families_present) > 1:
         print(f"  combined UF2 contains families: "
-              f"{[hex(f) for f in families]}", file=sys.stderr)
+              f"{sorted(hex(f) for f in families_present)}",
+              file=sys.stderr)
 
+    # Count per-family
+    per_fam_total = {}
+    for b in all_blocks:
+        key = b["family"] if (b["flags"] & 0x2000) else None
+        per_fam_total[key] = per_fam_total.get(key, 0) + 1
+
+    # Renumber per family. For multi-block families (code), rewrite
+    # block_no to the within-family index and num_blocks to the
+    # within-family total. For single-block families like DATA,
+    # leave the numbers picotool emitted alone (BOOTSEL is used to
+    # that shape).
+    per_fam_index = {}
     with out_path.open("wb") as f:
-        for i, b in enumerate(all_blocks):
-            # Rewrite block_no and num_blocks in-place.
+        for b in all_blocks:
+            key = b["family"] if (b["flags"] & 0x2000) else None
+            idx = per_fam_index.get(key, 0)
+            per_fam_index[key] = idx + 1
+            fam_total = per_fam_total[key]
+
             raw = bytearray(b["raw"])
-            struct.pack_into("<I", raw, 5 * 4, i)           # block_no
-            struct.pack_into("<I", raw, 6 * 4, total)       # num_blocks
+            if fam_total > 1:
+                # Genuine multi-block family — renumber strictly.
+                struct.pack_into("<I", raw, 5 * 4, idx)
+                struct.pack_into("<I", raw, 6 * 4, fam_total)
+            # else: single-block family (DATA metadata) — leave
+            # block_no/num_blocks as picotool originally set them.
             f.write(bytes(raw))
+
+        # Report what we produced
+        print(f"  per-family block counts: "
+              + ", ".join(
+                  f"{'no-fam' if k is None else hex(k)}={v}"
+                  for k, v in per_fam_total.items()
+              ), file=sys.stderr)
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("-o", "--output", required=True, type=Path,
                     help="Output combined UF2 path")
+    ap.add_argument("--rebase", action="append", default=[],
+                    metavar="FILE=OLD:NEW",
+                    help="Rebase an input's target addresses. "
+                         "Example: --rebase app.uf2=0x10000000:0x10020000 "
+                         "adds (NEW-OLD) to every block's target_addr "
+                         "in that file. May be specified multiple times.")
     ap.add_argument("inputs", nargs="+", type=Path,
                     help="Input UF2 files (in flash-region order)")
     args = ap.parse_args()
 
+    # Parse rebase specs: {file_stem_or_name: (old, new)}
+    rebase_map = {}
+    for spec in args.rebase:
+        try:
+            file_part, range_part = spec.split("=", 1)
+            old_str, new_str = range_part.split(":", 1)
+            rebase_map[file_part] = (int(old_str, 0), int(new_str, 0))
+        except Exception as e:
+            raise SystemExit(f"Bad --rebase spec {spec!r}: {e}")
+
     all_blocks = []
     for p in args.inputs:
         blocks = read_uf2_blocks(p)
+        delta = 0
+        for key, (old, new) in rebase_map.items():
+            if p.name == key or p.stem == key or str(p) == key:
+                delta = new - old
+                break
+        if delta != 0:
+            print(f"  rebasing {p.name} by +0x{delta:08x}")
+            for b in blocks:
+                b["target_addr"] += delta
+                # Also rewrite the raw header's target_addr field
+                raw = bytearray(b["raw"])
+                struct.pack_into("<I", raw, 3 * 4, b["target_addr"])
+                b["raw"] = bytes(raw)
         all_blocks.extend(blocks)
         min_addr = min(b["target_addr"] for b in blocks)
         max_addr = max(b["target_addr"] + b["payload_size"] for b in blocks)
