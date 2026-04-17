@@ -1,75 +1,109 @@
 # Flash-layout spike
 
-Validates that two independent firmware images at different flash
-offsets can coexist on a single RP2350 and cross-boot via
-`rom_chain_image()`. If this works, ThumbyOne's multi-slot boot
-architecture is viable; if not, Plan B (custom second-stage
-bootloader in slot 0) kicks in.
+Validates RP2350 multi-slot boot on the Thumby Color. A lobby
+firmware at `0x10000000` and an app firmware flashed into a
+declared partition at `0x10020000` can hand control back and
+forth via the BootROM's `rom_chain_image` primitive and a plain
+`watchdog_reboot`.
 
-## What it does
+## What it proves
 
-Builds two tiny "blinky" images from the same source file:
+| Direction | Mechanism |
+|-----------|-----------|
+| Lobby → App | Lobby writes a magic into `watchdog_hw->scratch[0]`, triggers `rom_reboot(NORMAL)`. On the subsequent cold boot the lobby's `main()` checks scratch[0] *before* any peripheral init and — if the magic is present — clears it and calls `rom_chain_image` from a pristine chip state. BootROM validates and launches the app. |
+| App → Lobby | App calls `watchdog_reboot(0, 0, 0)`. Chip resets. No magic in scratch → lobby takes the normal init path. |
 
-| Slot | Flash origin | Size window | Blink rate |
-|------|--------------|-------------|------------|
-| 0    | `0x10000000` | 128 KB      | ~1.25 Hz (slow) |
-| 1    | `0x10020000` | 1 MB        | ~6 Hz (fast)    |
+## Why the handoff dance is required
 
-Each image:
+On RP2350, `rom_chain_image` only works from a chip that hasn't
+touched SPI / DMA / LCD. Called from an initialized lobby the
+chain silently hangs somewhere inside bootrom. Doing a full
+`rom_reboot` first gets us back to pristine post-bootrom state
+for the chain call.
 
-- Blinks the LCD backlight (GPIO 7) at its slot's rate.
-- On **A** press: calls `rom_chain_image()` to chain into the
-  other slot.
-- On **MENU** press: `watchdog_reboot()` (lands back in slot 0 by
-  default since it's the boot ROM's default entry).
+Discovery cost: a few dozen device flashes before arriving at
+the scratch-magic pattern. Lessons are in the commit history.
 
-If `rom_chain_image` returns (meaning the target slot failed
-validation — bad IMAGE_DEF, wrong size, etc.), the backlight does
-a distinctive rapid triple-blink forever.
+## Flash layout
+
+```
+0x10000000   lobby image + embedded partition table
+             (family: absolute)
+0x10020000   partition 0 "app" — 256 KB window
+             (lobby's pt.json declares this)
+```
+
+The partition table is embedded in the lobby via
+`pico_embed_pt_in_binary` + `pt.json`. The BootROM reads it at
+startup and `rom_chain_image` uses it to validate that the app's
+flash window is a declared partition.
+
+## Image relocation trick
+
+The app is **linked at `0x10000000`** logically (default flash
+origin), not at `0x10020000`. When `rom_chain_image` launches
+the app, bootrom sets up the QMI ATRANS registers to remap the
+XIP window from `0x10000000` to the partition's physical flash
+offset. So the app's absolute code references resolve
+correctly — they all point to what the CPU sees as `0x10000xxx`,
+which ATRANS maps to physical flash `0x20xxx` (where the app's
+bytes actually live).
+
+The combiner (`tools/combine_uf2.py`) rebases the app UF2's
+target addresses from `0x10000000` to `0x10020000` before
+writing the combined `spike.uf2` so the bytes physically land
+in partition 0.
 
 ## Build
 
-From the repo root:
-
 ```
-cmake -S spike -B build_spike
+cmake -S spike -B build_spike -DCMAKE_BUILD_TYPE=Release
 cmake --build build_spike -j8
 ```
 
-Outputs (in `build_spike/`):
+Outputs:
 
-- `blinky_slot0.uf2` — slot 0 image only
-- `blinky_slot1.uf2` — slot 1 image only
-- `spike_combined.uf2` — both slots in one UF2 (flash once)
+- `build_spike/lobby.uf2` — lobby alone
+- `build_spike/app.uf2` — app alone (linked at `0x10000000`,
+  **not** what you flash directly)
+- `build_spike/spike.uf2` — combined, flash this
 
 ## Flash + run
 
 1. Power off the Thumby Color.
-2. Hold **DOWN** on the d-pad and turn on → boots into BOOTSEL; a
-   drive named `RP2350` appears on the host.
-3. Copy `spike_combined.uf2` to the drive. Device reboots.
-4. Observe: backlight blinks **slowly** (~1.25 Hz) → you're in
-   slot 0.
-5. Press **A** → backlight switches to **fast blink** (~6 Hz).
-   You're in slot 1, chained to successfully.
-6. Press **A** again → back to slow blink (slot 0).
-7. Press **MENU** from any slot → watchdog reboots → lands in
-   slot 0.
+2. Hold **DOWN** on the d-pad, turn on → BOOTSEL (`RP2350` drive
+   appears on your host).
+3. Copy `build_spike/spike.uf2` to it. Device reboots.
+4. Lobby boots: cyan "SLOT 0 (LOBBY)" banner + log + steady
+   backlight.
+5. Press **A** → "A pressed -> reboot / (launching app...)" →
+   brief black → backlight starts fast-flashing (~6 Hz). The
+   panel still shows the lobby's last text because the app
+   doesn't touch the LCD — the flashing BL is the app running.
+6. Press **A** → `watchdog_reboot(0, 0, 0)` → chip resets →
+   lobby comes back with steady backlight.
+7. Press **MENU** in the lobby → lobby self-reset (same path
+   used when no chain is wanted).
 
-## What each outcome means
+## Files
 
-| Observed | Means |
-|----------|-------|
-| Slow blink on power-on | Slot 0 is linked + booting correctly |
-| A → fast blink | `rom_chain_image` works; multi-slot architecture is viable |
-| A → rapid triple-blink forever | Slot 1 image didn't validate — linker issue, missing IMAGE_DEF, bad size, etc. |
-| Boot to flashing white / crash | Image metadata invalid; chain fell through |
-| Nothing on screen | Slot 0 didn't boot — more fundamental linker problem |
+```
+spike/
+    pt.json             partition table (embedded in lobby)
+    blinky_slot.c       both slots (SPIKE_SLOT_ID selects)
+    lcd_gc9107.c/h      LCD driver (lobby only)
+    font.c/h            bitmap font (lobby only)
+    CMakeLists.txt      builds lobby + app, combines UF2
+    README.md           this file
+```
 
-## Plan B trigger
+## References
 
-If `rom_chain_image` refuses to chain to a valid slot-1 image even
-after diagnosing (e.g. because RP2350's BootROM demands a
-partition-table entry for each image), switch to Plan B: slot 0
-becomes a hand-rolled second-stage bootloader that manually jumps
-to slot 1's entry vector after flipping the XIP/VTOR setup.
+- [pico-examples/bootloaders/encrypted](https://github.com/raspberrypi/pico-examples/tree/master/bootloaders/encrypted)
+  — the canonical RP2350 `rom_chain_image` caller. Different
+  target (SRAM, not flash) but same preamble pattern.
+- [pico-bootrom-rp2350](https://github.com/raspberrypi/pico-bootrom-rp2350)
+  — the source of truth for `rom_chain_image` validation and
+  the QMI ATRANS setup. See `src/main/arm/varm_launch_image.c`.
+- RP2350 datasheet, section 5 (Bootrom) — partition tables,
+  image definition blocks, reboot types.
