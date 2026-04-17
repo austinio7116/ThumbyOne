@@ -89,7 +89,7 @@ void thumbyone_xip_fast_setup(void) {
 
 /* ---- ATRANS slots 1..3 identity setup ----------------------------- */
 
-__attribute__((constructor(100)))
+__attribute__((constructor(101)))
 static void thumbyone_slot_init(void) {
     /* 1. Restore fast QPI XIP (see thumbyone_xip_fast_setup
      *    comment). This is the big perf fix — chained images

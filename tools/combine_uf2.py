@@ -191,12 +191,28 @@ def main():
                 break
         if delta != 0:
             print(f"  rebasing {p.name} by +0x{delta:08x}")
+            kept = []
+            FLASH_END = 0x11000000   # 16 MB flash on Thumby Color
+            dropped_oob = 0
             for b in blocks:
-                b["target_addr"] += delta
-                # Also rewrite the raw header's target_addr field
+                new_addr = b["target_addr"] + delta
+                if new_addr + b["payload_size"] > FLASH_END:
+                    # Block rebased past end-of-flash — usually a
+                    # picotool metadata stamp at 0x10FFFF00 that
+                    # every UF2 carries. The lobby's (un-rebased)
+                    # copy is kept; drop this one so we don't write
+                    # garbage to a wrapped address.
+                    dropped_oob += 1
+                    continue
+                b["target_addr"] = new_addr
                 raw = bytearray(b["raw"])
-                struct.pack_into("<I", raw, 3 * 4, b["target_addr"])
+                struct.pack_into("<I", raw, 3 * 4, new_addr)
                 b["raw"] = bytes(raw)
+                kept.append(b)
+            if dropped_oob:
+                print(f"    dropped {dropped_oob} out-of-flash "
+                      f"block(s) after rebase")
+            blocks = kept
         all_blocks.extend(blocks)
         min_addr = min(b["target_addr"] for b in blocks)
         max_addr = max(b["target_addr"] + b["payload_size"] for b in blocks)

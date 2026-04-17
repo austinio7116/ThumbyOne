@@ -41,7 +41,7 @@ set(THUMBYONE_UNIFIED_BUILD ON)
 option(THUMBYONE_WITH_NES  "Include ThumbyNES firmware"  ON)
 option(THUMBYONE_WITH_P8   "Include ThumbyP8 firmware"   ON)
 option(THUMBYONE_WITH_DOOM "Include ThumbyDOOM firmware" ON)
-option(THUMBYONE_WITH_MPY  "Include MicroPython firmware" OFF)
+option(THUMBYONE_WITH_MPY  "Include MicroPython firmware" ON)
 
 # ----- Shared library --------------------------------------------------
 # Brings in the handoff API + slot_layout.h + THUMBYONE_PT_JSON.
@@ -56,10 +56,13 @@ add_executable(lobby
     lobby/lcd_gc9107.c
     lobby/font.c
     ${THUMBYONE_COMMON_SRC}
+    ${THUMBYONE_COMMON_FS_SRC}
+    ${THUMBYONE_FATFS_SRC}
 )
 target_include_directories(lobby PRIVATE
     lobby
     ${THUMBYONE_COMMON_INCLUDE}
+    ${THUMBYONE_FATFS_INCLUDE}
 )
 target_link_libraries(lobby PRIVATE
     pico_stdlib
@@ -141,6 +144,78 @@ if (THUMBYONE_WITH_DOOM)
 endif()
 
 
+# ----- MicroPython slot -----------------------------------------------
+# Rebases to flash offset 0x420000 (partition 3, "MPY", 2 MB).
+#
+# mp-thumby has its own complex CMake project with its own
+# pico_sdk_init() + project() calls and ~600 lines of module
+# configuration. Rather than shoehorn that into add_subdirectory
+# (which is messy with nested projects), we use ExternalProject_Add
+# to invoke a fully isolated CMake build. Outputs firmware.uf2
+# which the combiner then rebases.
+#
+# THUMBYONE_SLOT_MODE / THUMBYONE_COMMON_SRC / THUMBYONE_COMMON_INCLUDE
+# are passed through so mp-thumby's CMakeLists' ThumbyOne hook
+# (at the bottom of ports/rp2/CMakeLists.txt) compiles in the
+# handoff source and marks UF2 family "absolute".
+if (THUMBYONE_WITH_MPY)
+    include(ExternalProject)
+
+    # mp-thumby isn't always a direct sibling of ThumbyOne — on
+    # the primary development box it lives at $HOME/mp-thumby
+    # because the Pico SDK is vendored under it and the SDK path
+    # is referenced widely. Probe both locations; allow override.
+    if (NOT DEFINED THUMBYONE_MPTHUMBY_DIR)
+        if (EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../mp-thumby/ports/rp2/CMakeLists.txt)
+            set(THUMBYONE_MPTHUMBY_DIR ${CMAKE_CURRENT_SOURCE_DIR}/../mp-thumby)
+        elseif (EXISTS $ENV{HOME}/mp-thumby/ports/rp2/CMakeLists.txt)
+            set(THUMBYONE_MPTHUMBY_DIR $ENV{HOME}/mp-thumby)
+        else()
+            message(FATAL_ERROR
+                "mp-thumby not found. Set THUMBYONE_MPTHUMBY_DIR "
+                "or clone mp-thumby alongside ThumbyOne "
+                "(or under $HOME/mp-thumby).")
+        endif()
+    endif()
+    message(STATUS "mp-thumby: ${THUMBYONE_MPTHUMBY_DIR}")
+
+    set(MPY_SRC_DIR   ${THUMBYONE_MPTHUMBY_DIR}/ports/rp2)
+    set(MPY_BUILD_DIR ${CMAKE_BINARY_DIR}/mpy_slot)
+    set(MPY_UF2 ${MPY_BUILD_DIR}/firmware.uf2)
+
+    # User C modules: Tiny Game Engine ONLY — the top-level
+    # TinyCircuits-Tiny-Game-Engine/micropython.cmake also pulls
+    # in gbemu, chess, and doom user modules, but ThumbyOne ships
+    # those systems as dedicated slots so including them again
+    # inside the MPY slot is pure duplication. Point straight at
+    # the engine's own micropython.cmake to skip the extras.
+    set(MPY_USER_C_MODULES
+        ${THUMBYONE_MPTHUMBY_DIR}/TinyCircuits-Tiny-Game-Engine/src/micropython.cmake)
+
+    # Build mp-thumby via its own cmake, isolated from ours.
+    ExternalProject_Add(mpy_slot
+        SOURCE_DIR     ${MPY_SRC_DIR}
+        BINARY_DIR     ${MPY_BUILD_DIR}
+        CMAKE_ARGS
+            -DMICROPY_BOARD=THUMBY_COLOR
+            -DPICO_SDK_PATH_OVERRIDE=${PICO_SDK_PATH}
+            -DUSER_C_MODULES=${MPY_USER_C_MODULES}
+            -DTHUMBYONE_SLOT_MODE=mpy
+            -DTHUMBYONE_COMMON_SRC=${THUMBYONE_COMMON_SRC}
+            -DTHUMBYONE_COMMON_INCLUDE=${THUMBYONE_COMMON_INCLUDE}
+            -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+        BUILD_BYPRODUCTS ${MPY_UF2}
+        INSTALL_COMMAND ""
+        BUILD_ALWAYS 1
+    )
+
+    list(APPEND THUMBYONE_SLOT_UF2_INPUTS ${MPY_UF2})
+    list(APPEND THUMBYONE_SLOT_UF2_REBASES
+        "firmware.uf2=0x10000000:0x10420000")
+    list(APPEND THUMBYONE_SLOT_DEPS mpy_slot)
+endif()
+
+
 # ----- Combine everything into one flash-once UF2 ---------------------
 # Build a list of --rebase args once so the custom command is
 # readable even as we add P8/DOOM/MPY slots later.
@@ -149,8 +224,14 @@ foreach(spec IN LISTS THUMBYONE_SLOT_UF2_REBASES)
     list(APPEND THUMBYONE_REBASE_ARGS --rebase ${spec})
 endforeach()
 
-add_custom_command(
-    OUTPUT  ${CMAKE_CURRENT_BINARY_DIR}/thumbyone.uf2
+# Combine into one flash-once UF2. Runs on every build so
+# ExternalProject byproducts (mp-thumby's firmware.uf2) don't
+# get missed — CMake doesn't reliably track file-level timestamp
+# changes across ExternalProject_Add boundaries, so a naive
+# OUTPUT-based custom_command would leave thumbyone.uf2 stale
+# when only mpy_slot rebuilt. An ALL custom_target with no
+# output file always runs, and the Python combiner is cheap.
+add_custom_target(thumbyone ALL
     COMMAND ${CMAKE_COMMAND} -E echo "Combining ThumbyOne UF2s..."
     COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/combine_uf2.py
                 ${THUMBYONE_REBASE_ARGS}
@@ -158,8 +239,6 @@ add_custom_command(
                 ${THUMBYONE_SLOT_UF2_INPUTS}
     DEPENDS ${THUMBYONE_SLOT_DEPS}
             ${CMAKE_CURRENT_SOURCE_DIR}/tools/combine_uf2.py
+    BYPRODUCTS ${CMAKE_CURRENT_BINARY_DIR}/thumbyone.uf2
     VERBATIM
-)
-add_custom_target(thumbyone ALL
-    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/thumbyone.uf2
 )
