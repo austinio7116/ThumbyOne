@@ -13,8 +13,39 @@
 #include "pico/bootrom.h"
 #include "hardware/watchdog.h"
 #include "hardware/structs/watchdog.h"
+#include "hardware/structs/qmi.h"
 #include "boot/picobin.h"
 #include "boot/picoboot_constants.h"
+
+
+/* ---- ATRANS slots 1..3 identity setup ----------------------------- */
+/*
+ * rom_chain_image sets up QMI ATRANS slot 0 for the partition
+ * it's launching, and leaves slots 1..3 at SIZE=0. Any read in
+ * slots 1..3's windows (XIP 0x10400000..0x11000000) then causes
+ * a bus fault.
+ *
+ * Every ThumbyOne slot needs the shared FAT (at physical
+ * 0x660000+, in slot 1) and potentially the P8 active-cart
+ * scratch (0x620000, also in slot 1). ROMs in the FAT can live
+ * anywhere in the 9.6 MB FAT region (up to physical 0x1000000,
+ * in slots 1/2/3). And DOOM's get_end_of_flash scan walks the
+ * full XIP window looking for its image tail.
+ *
+ * Simplest unified fix: set slots 1..3 to identity — logical
+ * 0x10400000..0x11000000 maps to physical 0x400000..0x1000000.
+ * Slot 0 is left alone (bootrom set it for our partition; we
+ * rely on that mapping for our own code).
+ *
+ * Constructor priority 101 — runs before main, before any user
+ * constructors (slot code) or flash operations. */
+__attribute__((constructor(101)))
+static void thumbyone_atrans_init(void) {
+    qmi_hw->atrans[1] = (0x400u << 16) | 0x400u;  /* 0x400000..0x800000 */
+    qmi_hw->atrans[2] = (0x400u << 16) | 0x800u;  /* 0x800000..0xC00000 */
+    qmi_hw->atrans[3] = (0x400u << 16) | 0xC00u;  /* 0xC00000..0x1000000 */
+    __asm__ volatile("dsb" ::: "memory");
+}
 
 
 /* ---- Scratch format helpers ---------------------------------------- */
