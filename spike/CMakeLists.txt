@@ -30,6 +30,10 @@ set(CMAKE_C_STANDARD 11)
 
 pico_sdk_init()
 
+# Common library (handoff API + slot layout constants).
+add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../common
+                 ${CMAKE_BINARY_DIR}/common)
+
 
 # ----- Slot 0: lobby at 0x10000000 with embedded partition table ------
 add_executable(lobby
@@ -39,23 +43,17 @@ add_executable(lobby
 )
 target_compile_definitions(lobby PRIVATE SPIKE_SLOT_ID=0)
 target_link_libraries(lobby PRIVATE
-    pico_stdlib
-    pico_bootrom
-    hardware_watchdog
+    thumbyone_common
     hardware_gpio
     hardware_spi
     hardware_dma
     hardware_flash
 )
 
-# Default linker script → flash at 0x10000000 with full 16 MB region.
-# (The lobby lives in unpartitioned space, which the PT defines as
-# "absolute" family compatible. It's free to use anywhere not
-# covered by declared partitions.)
-
-# Embed the partition table into the lobby binary. picotool runs
-# after link to inject the PT block(s).
-pico_embed_pt_in_binary(lobby ${CMAKE_CURRENT_SOURCE_DIR}/pt.json)
+# Embed the real ThumbyOne partition table (from common/pt.json).
+# This is the canonical PT used by the whole project; any slot
+# linked against thumbyone_common will reference the same layout.
+pico_embed_pt_in_binary(lobby ${THUMBYONE_PT_JSON})
 
 # Mark as "absolute" family — bootrom treats this as a
 # direct-address boot image, not something to place into a partition.
@@ -64,23 +62,21 @@ pico_set_uf2_family(lobby "absolute")
 pico_add_extra_outputs(lobby)
 
 
-# ----- Slot 1: app ---------------------------------------------------
-# Linked at default 0x10000000 flash origin. When chained via
-# rom_chain_image, bootrom sets up QMI ATRANS to remap the XIP
-# window so the image's absolute addresses work — so the image
-# MUST be linked at 0x10000000 logically, not at its physical
-# partition offset.
-# The combiner below rebases the app UF2's target addresses from
-# 0x10000000 to 0x10020000 so the bytes end up in partition 0
-# physically at flash offset 0x20000.
+# ----- Slot 1: app (test binary for the NES partition) ---------------
+# Linked at default 0x10000000 flash origin; rom_chain_image uses
+# QMI ATRANS to remap the XIP window to the partition's physical
+# offset at launch, so the image must be linked at the default
+# origin. The combiner rebases UF2 block addresses from
+# 0x10000000 to 0x10020000 so the bytes land in partition 0 (NES).
+#
+# This target is a placeholder — once the real ThumbyNES firmware
+# is wired up in step C, it replaces this app.
 add_executable(app
     blinky_slot.c
 )
 target_compile_definitions(app PRIVATE SPIKE_SLOT_ID=1)
 target_link_libraries(app PRIVATE
-    pico_stdlib
-    pico_bootrom
-    hardware_watchdog
+    thumbyone_common
     hardware_gpio
 )
 pico_set_uf2_family(app "absolute")

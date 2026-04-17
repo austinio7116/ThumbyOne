@@ -1,0 +1,61 @@
+{
+  "version": [1, 0],
+  "unpartitioned": {
+    "families": ["absolute"],
+    "permissions": {
+      "secure": "rw",
+      "nonsecure": "rw",
+      "bootloader": "rw"
+    }
+  },
+  "partitions": [
+    {
+      "name": "NES",
+      "id": 0,
+      "start": "128K",
+      "size": "1024K",
+      "families": ["absolute"],
+      "permissions": {
+        "secure": "rw",
+        "nonsecure": "rw",
+        "bootloader": "rw"
+      }
+    },
+    {
+      "name": "P8",
+      "id": 1,
+      "start": "1152K",
+      "size": "512K",
+      "families": ["absolute"],
+      "permissions": {
+        "secure": "rw",
+        "nonsecure": "rw",
+        "bootloader": "rw"
+      }
+    },
+    {
+      "name": "DOOM",
+      "id": 2,
+      "start": "1664K",
+      "size": "2560K",
+      "families": ["absolute"],
+      "permissions": {
+        "secure": "rw",
+        "nonsecure": "rw",
+        "bootloader": "rw"
+      }
+    },
+    {
+      "name": "MPY",
+      "id": 3,
+      "start": "4224K",
+      "size": "2048K",
+      "families": ["absolute"],
+      "permissions": {
+        "secure": "rw",
+        "nonsecure": "rw",
+        "bootloader": "rw"
+      }
+    }
+  ]
+}
