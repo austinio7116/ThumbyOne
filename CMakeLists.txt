@@ -39,7 +39,7 @@ set(THUMBYONE_UNIFIED_BUILD ON)
 # (Only NES is wired in step C1. P8 / DOOM / MPY follow once their
 # subproject CMake hooks are in place.)
 option(THUMBYONE_WITH_NES  "Include ThumbyNES firmware"  ON)
-option(THUMBYONE_WITH_P8   "Include ThumbyP8 firmware"   OFF)
+option(THUMBYONE_WITH_P8   "Include ThumbyP8 firmware"   ON)
 option(THUMBYONE_WITH_DOOM "Include ThumbyDOOM firmware" OFF)
 option(THUMBYONE_WITH_MPY  "Include MicroPython firmware" OFF)
 
@@ -86,15 +86,32 @@ if (THUMBYONE_WITH_NES)
                      EXCLUDE_FROM_ALL)
     unset(THUMBYONE_SLOT_MODE)
 
-    # NES target name (from ThumbyNES/device/CMakeLists.txt).
     set(NES_TARGET nesrun_device)
-
-    # Append to combine inputs, with a rebase to the NES partition.
     list(APPEND THUMBYONE_SLOT_UF2_INPUTS
         ${CMAKE_BINARY_DIR}/nes_slot/${NES_TARGET}.uf2)
     list(APPEND THUMBYONE_SLOT_UF2_REBASES
         "${NES_TARGET}.uf2=0x10000000:0x10020000")
     list(APPEND THUMBYONE_SLOT_DEPS ${NES_TARGET})
+endif()
+
+
+# ----- P8 slot --------------------------------------------------------
+# Linked at default 0x10000000 logically (bootrom's ATRANS remaps).
+# Combiner rebases blocks to 0x10120000 (partition 1, "P8", per
+# common/pt.json: 512 KB at flash offset 1152K = 0x120000).
+if (THUMBYONE_WITH_P8)
+    set(THUMBYONE_SLOT_MODE "p8")
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../ThumbyP8/device
+                     ${CMAKE_BINARY_DIR}/p8_slot
+                     EXCLUDE_FROM_ALL)
+    unset(THUMBYONE_SLOT_MODE)
+
+    set(P8_TARGET p8run_device)
+    list(APPEND THUMBYONE_SLOT_UF2_INPUTS
+        ${CMAKE_BINARY_DIR}/p8_slot/${P8_TARGET}.uf2)
+    list(APPEND THUMBYONE_SLOT_UF2_REBASES
+        "${P8_TARGET}.uf2=0x10000000:0x10120000")
+    list(APPEND THUMBYONE_SLOT_DEPS ${P8_TARGET})
 endif()
 
 
