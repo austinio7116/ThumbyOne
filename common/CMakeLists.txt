@@ -1,34 +1,32 @@
 #
-# ThumbyOne common library.
+# ThumbyOne common code.
 #
-# Add this subdirectory from a parent CMakeLists that has already
-# set up the Pico SDK (pico_sdk_init called). Link any target
-# against `thumbyone_common` to get:
+# Exports:
+#   THUMBYONE_COMMON_SRC      — list of .c sources to add to any
+#                                slot/lobby target that needs the
+#                                handoff API.
+#   THUMBYONE_COMMON_INCLUDE  — include path for the public headers.
+#   THUMBYONE_PT_JSON         — canonical partition-table JSON path.
 #
-#   - The ThumbyOne slot layout constants (slot_layout.h).
-#   - The cross-reboot handoff API (thumbyone_handoff.[ch]).
-#
-# This library does not embed the partition table — that's the
-# lobby's job via pico_embed_pt_in_binary(lobby ${THUMBYONE_PT_JSON}).
-# Slot binaries don't embed the PT; they just need to know slot
-# offsets (from slot_layout.h) and use the handoff API.
+# Consumers add the sources to their own add_executable(), add the
+# include dir, and that's it. We deliberately DON'T wrap this as a
+# STATIC/OBJECT/INTERFACE library: every target (NES / P8 / DOOM /
+# MPY / lobby) already links pico_stdlib directly, and any CMake
+# library wrapper on top of pico_stdlib ends up either absorbing
+# the SDK's transitive sources (STATIC / OBJECT with target_link
+# of pico_stdlib) or needing extra include-propagation plumbing.
+# Having every consumer compile the handoff source itself is the
+# straightforward, dedup-free approach.
 #
 
-add_library(thumbyone_common STATIC
-    thumbyone_handoff.c
-)
+set(THUMBYONE_COMMON_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/thumbyone_handoff.c
+    PARENT_SCOPE)
 
-target_include_directories(thumbyone_common PUBLIC
+set(THUMBYONE_COMMON_INCLUDE
     ${CMAKE_CURRENT_SOURCE_DIR}
-)
+    PARENT_SCOPE)
 
-target_link_libraries(thumbyone_common PUBLIC
-    pico_stdlib
-    pico_bootrom
-    hardware_watchdog
-)
-
-# Path to the canonical partition-table JSON. Parent projects
-# pass this to pico_embed_pt_in_binary on their lobby target.
-set(THUMBYONE_PT_JSON ${CMAKE_CURRENT_SOURCE_DIR}/pt.json
+set(THUMBYONE_PT_JSON
+    ${CMAKE_CURRENT_SOURCE_DIR}/pt.json
     PARENT_SCOPE)

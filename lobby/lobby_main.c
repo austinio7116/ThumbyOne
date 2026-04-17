@@ -24,8 +24,10 @@
 #include "lcd_gc9107.h"
 #include "font.h"
 
-#define PIN_BL       7
+#define PIN_BL        7
+#define PIN_BTN_LB    6
 #define PIN_BTN_A    21
+#define PIN_BTN_RB   22
 #define PIN_BTN_B    25
 #define PIN_BTN_MENU 26
 
@@ -42,6 +44,8 @@ static __attribute__((aligned(4))) uint8_t g_workarea[4 * 1024];
 
 static bool btn_a_pressed(void)    { return !gpio_get(PIN_BTN_A); }
 static bool btn_b_pressed(void)    { return !gpio_get(PIN_BTN_B); }
+static bool btn_lb_pressed(void)   { return !gpio_get(PIN_BTN_LB); }
+static bool btn_rb_pressed(void)   { return !gpio_get(PIN_BTN_RB); }
 static bool btn_menu_pressed(void) { return !gpio_get(PIN_BTN_MENU); }
 
 static void render_home(void) {
@@ -55,12 +59,13 @@ static void render_home(void) {
     for (int x = 4; x < 124; ++x) g_fb[38 * 128 + x] = COL_TEXT;
 
     nes_font_draw(g_fb, "system selector",  2, 46, COL_TEXT);
-    nes_font_draw(g_fb, "",                 2, 56, COL_TEXT);
-    nes_font_draw(g_fb, "A:    launch NES", 2, 66, COL_TEXT);
-    nes_font_draw(g_fb, "B:    launch P8",  2, 76, COL_TEXT);
-    nes_font_draw(g_fb, "MENU: reboot",     2, 86, COL_TEXT);
+    nes_font_draw(g_fb, "A:   launch NES",  2, 58, COL_TEXT);
+    nes_font_draw(g_fb, "B:   launch P8",   2, 68, COL_TEXT);
+    nes_font_draw(g_fb, "LB:  launch DOOM", 2, 78, COL_TEXT);
+    nes_font_draw(g_fb, "RB:  launch MPY",  2, 88, COL_TEXT);
+    nes_font_draw(g_fb, "MENU: reboot",     2, 98, COL_TEXT);
 
-    nes_font_draw(g_fb, "(C2a placeholder)", 4, 120, COL_ACTION);
+    nes_font_draw(g_fb, "(step-C placeholder)", 4, 120, COL_ACTION);
 
     nes_lcd_present(g_fb);
     nes_lcd_wait_idle();
@@ -76,6 +81,8 @@ int main(void) {
     /* Normal lobby flow — no handoff pending. */
     gpio_init(PIN_BTN_A);    gpio_set_dir(PIN_BTN_A, GPIO_IN);    gpio_pull_up(PIN_BTN_A);
     gpio_init(PIN_BTN_B);    gpio_set_dir(PIN_BTN_B, GPIO_IN);    gpio_pull_up(PIN_BTN_B);
+    gpio_init(PIN_BTN_LB);   gpio_set_dir(PIN_BTN_LB, GPIO_IN);   gpio_pull_up(PIN_BTN_LB);
+    gpio_init(PIN_BTN_RB);   gpio_set_dir(PIN_BTN_RB, GPIO_IN);   gpio_pull_up(PIN_BTN_RB);
     gpio_init(PIN_BTN_MENU); gpio_set_dir(PIN_BTN_MENU, GPIO_IN); gpio_pull_up(PIN_BTN_MENU);
 
     nes_lcd_init();
@@ -95,6 +102,20 @@ int main(void) {
             sleep_ms(50);
             nes_lcd_wait_idle();
             thumbyone_handoff_request_slot(THUMBYONE_SLOT_P8);
+            /* does not return */
+        }
+        if (btn_lb_pressed()) {
+            while (btn_lb_pressed()) sleep_ms(10);
+            sleep_ms(50);
+            nes_lcd_wait_idle();
+            thumbyone_handoff_request_slot(THUMBYONE_SLOT_DOOM);
+            /* does not return */
+        }
+        if (btn_rb_pressed()) {
+            while (btn_rb_pressed()) sleep_ms(10);
+            sleep_ms(50);
+            nes_lcd_wait_idle();
+            thumbyone_handoff_request_slot(THUMBYONE_SLOT_MPY);
             /* does not return */
         }
         if (btn_menu_pressed()) {

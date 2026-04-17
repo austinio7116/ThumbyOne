@@ -40,7 +40,7 @@ set(THUMBYONE_UNIFIED_BUILD ON)
 # subproject CMake hooks are in place.)
 option(THUMBYONE_WITH_NES  "Include ThumbyNES firmware"  ON)
 option(THUMBYONE_WITH_P8   "Include ThumbyP8 firmware"   ON)
-option(THUMBYONE_WITH_DOOM "Include ThumbyDOOM firmware" OFF)
+option(THUMBYONE_WITH_DOOM "Include ThumbyDOOM firmware" ON)
 option(THUMBYONE_WITH_MPY  "Include MicroPython firmware" OFF)
 
 # ----- Shared library --------------------------------------------------
@@ -55,10 +55,16 @@ add_executable(lobby
     lobby/lobby_main.c
     lobby/lcd_gc9107.c
     lobby/font.c
+    ${THUMBYONE_COMMON_SRC}
 )
-target_include_directories(lobby PRIVATE lobby)
+target_include_directories(lobby PRIVATE
+    lobby
+    ${THUMBYONE_COMMON_INCLUDE}
+)
 target_link_libraries(lobby PRIVATE
-    thumbyone_common
+    pico_stdlib
+    pico_bootrom
+    hardware_watchdog
     hardware_gpio
     hardware_spi
     hardware_dma
@@ -112,6 +118,26 @@ if (THUMBYONE_WITH_P8)
     list(APPEND THUMBYONE_SLOT_UF2_REBASES
         "${P8_TARGET}.uf2=0x10000000:0x10120000")
     list(APPEND THUMBYONE_SLOT_DEPS ${P8_TARGET})
+endif()
+
+
+# ----- DOOM slot ------------------------------------------------------
+# Rebases to flash offset 0x1A0000 (partition 2, "DOOM", 2.5 MB).
+# Shareware WHD is embedded in the firmware via .incbin, so the
+# full image is ~2.37 MB. Fits with breathing room.
+if (THUMBYONE_WITH_DOOM)
+    set(THUMBYONE_SLOT_MODE "doom")
+    add_subdirectory(${CMAKE_CURRENT_SOURCE_DIR}/../ThumbyDOOM/device
+                     ${CMAKE_BINARY_DIR}/doom_slot
+                     EXCLUDE_FROM_ALL)
+    unset(THUMBYONE_SLOT_MODE)
+
+    set(DOOM_TARGET thumbydoom)
+    list(APPEND THUMBYONE_SLOT_UF2_INPUTS
+        ${CMAKE_BINARY_DIR}/doom_slot/${DOOM_TARGET}.uf2)
+    list(APPEND THUMBYONE_SLOT_UF2_REBASES
+        "${DOOM_TARGET}.uf2=0x10000000:0x101A0000")
+    list(APPEND THUMBYONE_SLOT_DEPS ${DOOM_TARGET})
 endif()
 
 
