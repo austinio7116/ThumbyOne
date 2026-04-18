@@ -18,6 +18,7 @@
 #include "hardware/flash.h"
 #include "hardware/sync.h"
 #include "hardware/watchdog.h"
+#include "hardware/pwm.h"
 #include <stdio.h>
 #include <string.h>
 
@@ -209,12 +210,59 @@ static bool confirm_erase_chord(void) {
 }
 
 
-#define COL_USB    0x07E0   /* green */
-#define COL_USB_ON 0xFFE0   /* yellow — flashes during transfers */
+#define COL_USB_OFF 0x4208   /* dim grey — not connected */
+#define COL_USB_ON  0x07E0   /* green — mounted */
+#define COL_USB_BUSY 0xFFE0  /* yellow — transferring */
 
-/* Tracks what the USB row last displayed so we only redraw when
- * the state actually changes — redrawing 128x128 at 60 Hz just to
- * animate an indicator is pointless. */
+/* --- physical RGB LED --------------------------------------------- *
+ * The Thumby Color's status LED is a common-anode RGB tri-LED driven
+ * from GPIOs 10/11/12. Pin map + PWM wrap match the engine's
+ * engine_io_rp3.c so the lobby's LED behaviour feels the same as a
+ * game's engine_io.indicator(color) call.
+ *
+ * Common-anode: a PWM level of 0 is fully on, 2047 is fully off. */
+#define PIN_LED_G   10   /* PWM5 A */
+#define PIN_LED_R   11   /* PWM5 B */
+#define PIN_LED_B   12   /* PWM6 A */
+#define LED_PWM_WRAP 2048
+
+static void led_setup(void) {
+    /* Slice 5 drives R + G, slice 6 drives B. */
+    gpio_set_function(PIN_LED_R, GPIO_FUNC_PWM);
+    gpio_set_function(PIN_LED_G, GPIO_FUNC_PWM);
+    gpio_set_function(PIN_LED_B, GPIO_FUNC_PWM);
+    uint slice_rg = pwm_gpio_to_slice_num(PIN_LED_R);
+    uint slice_b  = pwm_gpio_to_slice_num(PIN_LED_B);
+    pwm_config cfg = pwm_get_default_config();
+    pwm_config_set_wrap(&cfg, LED_PWM_WRAP);
+    pwm_init(slice_rg, &cfg, true);
+    pwm_init(slice_b,  &cfg, true);
+    /* Start with LED off (common-anode → all channels high). */
+    pwm_set_gpio_level(PIN_LED_R, LED_PWM_WRAP);
+    pwm_set_gpio_level(PIN_LED_G, LED_PWM_WRAP);
+    pwm_set_gpio_level(PIN_LED_B, LED_PWM_WRAP);
+}
+
+/* Set the LED to a normalised RGB triple (each 0..255). */
+static void led_set_rgb(int r, int g, int b) {
+    /* Invert for common-anode. Scale 0..255 → 0..2047. */
+    pwm_set_gpio_level(PIN_LED_R, (uint16_t)((255 - r) * LED_PWM_WRAP / 255));
+    pwm_set_gpio_level(PIN_LED_G, (uint16_t)((255 - g) * LED_PWM_WRAP / 255));
+    pwm_set_gpio_level(PIN_LED_B, (uint16_t)((255 - b) * LED_PWM_WRAP / 255));
+}
+
+static void led_set_off(void)    { led_set_rgb(0, 0, 0); }
+static void led_set_green(void)  { led_set_rgb(0, 80, 0); }  /* dim — it's very bright at full */
+static void led_set_yellow(void) { led_set_rgb(90, 60, 0); }
+
+/* Top-right USB indicator. A single-character-width "USB" label
+ * followed by a 5x5 filled square acting as an LED. State changes
+ * re-draw just the strip rather than the whole home screen.
+ *
+ * Earlier this lived as a two-row text strip at y=108, but that
+ * strip clipped the lower row of 48x48 tiles (tile bottoms sit at
+ * y=116). Pulling the indicator up into the header row lets the
+ * full tiles be visible. */
 typedef enum {
     USB_ROW_NONE = 0,    /* unplugged */
     USB_ROW_READY,       /* host has mounted the drive */
@@ -223,25 +271,47 @@ typedef enum {
 
 static usb_row_state_t g_usb_row_state = USB_ROW_NONE;
 
+/* Header strip extent (y=0..10). draw_usb_row only repaints the
+ * right-hand portion so the "ThumbyOne" title on the left doesn't
+ * flicker on every USB state change. */
+#define USB_LED_X   119   /* 5x5 dot at the far right */
+#define USB_LED_Y   3
+#define USB_LED_S   5
+#define USB_LABEL_X 103   /* "USB" text just left of the LED */
+
 static void draw_usb_row(usb_row_state_t st) {
-    /* Clear the two-row strip (y=108..126). */
-    for (int y = 108; y < 128; ++y)
-        for (int x = 0; x < 128; ++x)
+    /* Repaint only the right-hand header strip. */
+    for (int y = 0; y < 11; ++y)
+        for (int x = 100; x < 128; ++x)
             g_fb[y * 128 + x] = COL_BG;
+
+    uint16_t led_col;
+    uint16_t lbl_col;
     switch (st) {
-    case USB_ROW_NONE:
-        nes_font_draw(g_fb, "hold MENU at boot:", 4, 110, COL_ACTION);
-        nes_font_draw(g_fb, "force lobby recovery",4, 120, COL_ACTION);
+    case USB_ROW_ACTIVE:
+        led_col = COL_USB_BUSY;
+        lbl_col = COL_USB_BUSY;
+        led_set_yellow();
         break;
     case USB_ROW_READY:
-        nes_font_draw(g_fb, "USB connected", 18, 110, COL_USB);
-        nes_font_draw(g_fb, "drop files on drive", 4, 120, COL_USB);
+        led_col = COL_USB_ON;
+        lbl_col = COL_USB_ON;
+        led_set_green();
         break;
-    case USB_ROW_ACTIVE:
-        nes_font_draw(g_fb, "USB transfer...", 14, 110, COL_USB_ON);
-        nes_font_draw(g_fb, "do not unplug",   20, 120, COL_USB_ON);
+    case USB_ROW_NONE:
+    default:
+        led_col = COL_USB_OFF;
+        lbl_col = COL_USB_OFF;
+        led_set_off();
         break;
     }
+
+    nes_font_draw(g_fb, "USB", USB_LABEL_X, 2, lbl_col);
+    /* LED body. */
+    for (int j = 0; j < USB_LED_S; ++j)
+        for (int i = 0; i < USB_LED_S; ++i)
+            g_fb[(USB_LED_Y + j) * 128 + (USB_LED_X + i)] = led_col;
+
     nes_lcd_present(g_fb);
     nes_lcd_wait_idle();
 }
@@ -249,14 +319,15 @@ static void draw_usb_row(usb_row_state_t st) {
 /* --- system selector grid ---------------------------------------- *
  *
  * 2x2 grid of 48x48 system icons centred horizontally. Grid area
- * runs y=12..108, leaving the top 12 px for an optional title strip
- * and the bottom 20 px for the USB-state hint row. Icons are at:
+ * runs y=12..116 (the last tile's bottom row). The top 10 px hold
+ * the "ThumbyOne" title + USB indicator strip; the USB indicator
+ * LED mirrors the on-screen dot to the device's physical RGB LED.
+ * Tiles are at:
  *
  *    (12, 12)   (68, 12)   — NES, P8
  *    (12, 68)   (68, 68)   — DOOM, MPY
  *
- * Selected tile gets a 2 px yellow border + the slot label drawn
- * below the grid in dim grey. D-pad moves, A launches.
+ * Selected tile gets a 2 px yellow border. D-pad moves, A launches.
  */
 
 /* Slot order in the grid must match the lobby_icons[] indexing
@@ -459,6 +530,7 @@ int main(void) {
 
     nes_lcd_init();
     nes_lcd_backlight(1);
+    led_setup();
 
     /* Recovery chord: LB+RB held at boot → wipe shared FAT. Runs
      * BEFORE home-screen render so there's no ambiguity about what

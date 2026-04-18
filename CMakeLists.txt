@@ -99,6 +99,7 @@ target_link_libraries(lobby PRIVATE
     pico_unique_id
     hardware_watchdog
     hardware_gpio
+    hardware_pwm
     hardware_spi
     hardware_dma
     hardware_flash
