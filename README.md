@@ -541,9 +541,8 @@ Drop replacement PNGs into `lobby/icons/` (same filenames: `nes.png`, `p8.png`, 
 
 ## Known limits / future work
 
-- **Lobby screenshots** in this README are missing — will add when this README goes live.
-- The engine submodule (`mp-thumby/TinyCircuits-Tiny-Game-Engine`) has two local patches (scratch region `#ifndef` guards + `engine_link_rp3.c` USBDEV guard) that aren't upstreamed because the remote points at the TinyCircuits upstream we don't have write access to. Fresh clones need to apply those manually or we need a patch step in the build.
-- In-game (Python-side) lobby return for MPY games is via hard-reset → lobby-MENU-at-boot chord; there's no "exit game → back to MPY picker" flow yet. Games currently exit via `engine.reset()` which drops to MicroPython REPL.
+- **Hold-MENU overlay in MPY games.** Games own the LCD + button polling once they're running, so cooperative UI from our side isn't trivial. The background watchdog already reboots on 2 s MENU-hold; turning that into an overlay with a "Back to lobby" confirm + battery/fw widgets is the next piece of polish.
+- **Cross-slot chord for DOOM.** DOOM's in-game Quit menu now returns to the lobby, and MENU-long-hold works for MPY/NES/P8. DOOM doesn't honour a long-hold chord yet — user has to go through the menu.
 
 ## Repo layout
 

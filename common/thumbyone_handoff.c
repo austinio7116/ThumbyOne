@@ -205,6 +205,23 @@ void thumbyone_handoff_clear(void) {
     watchdog_hw->scratch[1] = 0;
 }
 
+void thumbyone_handoff_prepare_slot(thumbyone_slot_t slot) {
+    /* Set the scratch magic for `slot` WITHOUT triggering a reboot.
+     * Used by the MPY slot's watchdog_reboot wrap to route
+     * engine.reset() (which does a bare watchdog reboot) back
+     * through the lobby to a fresh MPY-slot chain — user's game
+     * calls engine.reset(), slot resets, lobby consumes the magic,
+     * chains back into the MPY slot, C picker runs again. */
+    if (slot == THUMBYONE_SLOT_LOBBY
+        || thumbyone_slot_partition_id(slot) < 0) {
+        thumbyone_handoff_clear();
+        return;
+    }
+    uint32_t s0 = scratch0_for_slot(slot);
+    watchdog_hw->scratch[0] = s0;
+    watchdog_hw->scratch[1] = scratch1_for(s0);
+}
+
 void thumbyone_handoff_request_slot(thumbyone_slot_t slot) {
     /* Caller must pass a launchable slot; lobby is handled by
      * request_lobby. Be defensive: if someone passes the lobby,

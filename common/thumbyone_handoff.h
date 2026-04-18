@@ -68,6 +68,13 @@ void thumbyone_handoff_clear(void);
  * (non-lobby). */
 void thumbyone_handoff_request_slot(thumbyone_slot_t slot);
 
+/* Set the handoff magic for `slot` WITHOUT rebooting. Use when the
+ * caller is piggybacking on some other reboot path — e.g. the MPY
+ * slot wraps watchdog_reboot so engine.reset() chains back into a
+ * fresh MPY slot (→ C picker) rather than dropping the user at the
+ * top-level lobby. */
+void thumbyone_handoff_prepare_slot(thumbyone_slot_t slot);
+
 /* Write no handoff (lobby is the default-boot image) and reboot.
  * Does not return on success. Called by a slot when the user
  * wants to go back to the lobby. */

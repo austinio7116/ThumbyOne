@@ -100,6 +100,7 @@ target_link_libraries(lobby PRIVATE
     hardware_watchdog
     hardware_gpio
     hardware_pwm
+    hardware_adc
     hardware_spi
     hardware_dma
     hardware_flash

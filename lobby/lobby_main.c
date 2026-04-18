@@ -32,6 +32,9 @@
 #include "lobby_usb.h"
 #include "lobby_icons.h"
 #include "pico/time.h"
+#include "hardware/adc.h"
+#include "thumbyone_disk.h"
+#include "ff.h"
 
 #define PIN_BL        7
 #define PIN_BTN_LEFT  0
@@ -210,9 +213,9 @@ static bool confirm_erase_chord(void) {
 }
 
 
-#define COL_USB_OFF 0x4208   /* dim grey — not connected */
-#define COL_USB_ON  0x07E0   /* green — mounted */
-#define COL_USB_BUSY 0xFFE0  /* yellow — transferring */
+#define COL_USB_OFF  0xFFFF  /* white — idle (matches rest-of-firmware default) */
+#define COL_USB_ON   0x07FF  /* cyan — host mounted (matches engine's charge colour) */
+#define COL_USB_BUSY 0xFD20  /* amber — transferring */
 
 /* --- physical RGB LED --------------------------------------------- *
  * The Thumby Color's status LED is a common-anode RGB tri-LED driven
@@ -235,31 +238,39 @@ static void led_set_rgb(int r, int g, int b) {
 }
 
 static void led_set_off(void)    { led_set_rgb(0, 0, 0); }
-/* RGB LED channels aren't perceptually balanced at equal PWM — the
- * red die is brighter per unit drive than green or blue on this
- * common-anode module, so (60, 60, 60) reads as pink. Push green
- * up and red down to land on something that actually looks white.
- * Total brightness stays "dim" (the LED is painfully bright at
- * full drive). */
-static void led_set_white(void)  { led_set_rgb(25, 80, 55); }
-static void led_set_green(void)  { led_set_rgb(0, 80, 0); }
-static void led_set_yellow(void) { led_set_rgb(90, 60, 0); }
+/* The "white" default across the rest of the Thumby Color firmware
+ * is actually just pure green at full PWM — see engine_io_rp3.c's
+ * default indicator (0b0000011111100000 = pure green 0x07E0). The
+ * green die is bright enough at full drive to read as white-ish.
+ * Match that idle colour so the LED looks the same in the lobby as
+ * in a game.
+ *
+ * USB states use different hues so they're visibly distinct from
+ * the idle white-ish green: cyan (green + blue) for "host mounted"
+ * and warm amber (red + green) for "transfer in flight". */
+static void led_set_white(void)  { led_set_rgb(0, 200, 0); }
+static void led_set_green(void)  { led_set_rgb(0, 80, 80); }  /* actually cyan */
+static void led_set_yellow(void) { led_set_rgb(120, 70, 0); } /* amber — warmer than pure yellow */
+
+/* Per-pin PWM init — matches the engine's engine_io_rp3_pwm_setup()
+ * pattern exactly. Calling pwm_init once per pin (rather than once
+ * per slice) seems to be what actually lands the PWM channel
+ * configuration reliably on the RP2350 — my previous 'init each
+ * slice once' version left slice 5 channel A (green) silent. */
+static void led_pwm_setup_pin(uint gpio) {
+    gpio_set_function(gpio, GPIO_FUNC_PWM);
+    uint slice = pwm_gpio_to_slice_num(gpio);
+    pwm_config cfg = pwm_get_default_config();
+    pwm_config_set_clkdiv_int(&cfg, 1);
+    pwm_config_set_wrap(&cfg, LED_PWM_WRAP);
+    pwm_init(slice, &cfg, true);
+    pwm_set_gpio_level(gpio, 0);   /* full on — matches engine default */
+}
 
 static void led_setup(void) {
-    /* Slice 5 drives R + G, slice 6 drives B. */
-    gpio_set_function(PIN_LED_R, GPIO_FUNC_PWM);
-    gpio_set_function(PIN_LED_G, GPIO_FUNC_PWM);
-    gpio_set_function(PIN_LED_B, GPIO_FUNC_PWM);
-    uint slice_rg = pwm_gpio_to_slice_num(PIN_LED_R);
-    uint slice_b  = pwm_gpio_to_slice_num(PIN_LED_B);
-    pwm_config cfg = pwm_get_default_config();
-    pwm_config_set_wrap(&cfg, LED_PWM_WRAP);
-    pwm_init(slice_rg, &cfg, true);
-    pwm_init(slice_b,  &cfg, true);
-    /* Start with the default white — the lobby's USB state row
-     * will override this once the main loop starts, but we want
-     * the LED visibly on from first frame rather than dark for
-     * the few ms before the first state update. */
+    led_pwm_setup_pin(PIN_LED_R);
+    led_pwm_setup_pin(PIN_LED_G);
+    led_pwm_setup_pin(PIN_LED_B);
     led_set_white();
 }
 
@@ -507,6 +518,313 @@ static usb_row_state_t usb_current_row_state(void) {
     return (delta < 400000) ? USB_ROW_ACTIVE : USB_ROW_READY;
 }
 
+/* =======================================================================
+ * Lobby MENU overlay
+ *
+ * MENU used to just reboot the lobby, which was pointless — you're
+ * already in the lobby. Now it opens a status panel with battery,
+ * disk, USB state, and a Reboot action tucked inside. Same NES-
+ * style look as the MPY-slot picker menu.
+ * ===================================================================== */
+
+/* --- battery (ADC channel 3 via GPIO 29) --- */
+#define L_BATT_GPIO     29
+#define L_BATT_ADC_CH    3
+#define L_ADC_REF_V    3.3f
+#define L_ADC_MAX     4095
+#define L_HALF_MIN_V  (1.4f + 0.05f)   /* ~2.9 V actual */
+#define L_HALF_MAX_V  (2.0f - 0.15f)   /* ~3.7 V actual */
+
+static bool g_adc_ready = false;
+static void battery_init(void) {
+    if (g_adc_ready) return;
+    adc_init();
+    adc_gpio_init(L_BATT_GPIO);
+    g_adc_ready = true;
+}
+static float battery_half_voltage(void) {
+    battery_init();
+    adc_select_input(L_BATT_ADC_CH);
+    /* Discard first sample after channel switch — RP2350 quirk. */
+    (void)adc_read();
+    const int N = 8;
+    uint32_t sum = 0;
+    for (int i = 0; i < N; i++) sum += adc_read();
+    return ((float)sum / N) * L_ADC_REF_V / (float)L_ADC_MAX;
+}
+static float battery_voltage(void) { return 2.0f * battery_half_voltage(); }
+static bool  battery_charging(void) { return battery_half_voltage() >= L_HALF_MAX_V; }
+static int   battery_percent(void) {
+    float h = battery_half_voltage();
+    if (h <= L_HALF_MIN_V) return 0;
+    if (h >= L_HALF_MAX_V) return 100;
+    int p = (int)((h - L_HALF_MIN_V) / (L_HALF_MAX_V - L_HALF_MIN_V) * 100.0f + 0.5f);
+    if (p < 0) p = 0; if (p > 100) p = 100;
+    return p;
+}
+
+/* --- disk stats --- */
+static void disk_stats_kb(uint32_t *free_kb, uint32_t *total_kb) {
+    *free_kb = 0; *total_kb = 0;
+    FATFS *fs = NULL;
+    DWORD free_clust = 0;
+    if (f_getfree("/", &free_clust, &fs) != FR_OK || !fs) return;
+    uint32_t csize = fs->csize;
+    uint32_t total_sectors = (fs->n_fatent - 2) * csize;
+    uint32_t free_sectors  = free_clust * csize;
+    *total_kb = (uint32_t)((uint64_t)total_sectors * 512 / 1024);
+    *free_kb  = (uint32_t)((uint64_t)free_sectors  * 512 / 1024);
+}
+
+/* --- menu palette (NES-style) --- */
+#define L_COL_BG       0x0000
+#define L_COL_PANEL    0x10A2
+#define L_COL_FG       0xFFFF
+#define L_COL_TEXT     0xDEFB
+#define L_COL_DIM      0x8410
+#define L_COL_HIGHLT   0x07E0    /* green cursor row */
+#define L_COL_MENU_TITLE 0xFD20  /* orange title bar */
+#define L_COL_HL_BG    0x0220    /* dim green cursor bg */
+#define L_COL_BAR_BG   0x39E7
+#define L_COL_ACCENT   0xFFE0
+
+typedef enum {
+    LMI_BATT = 0,
+    LMI_DISK,
+    LMI_USB,
+    LMI_FW,
+    LMI_REBOOT,
+    LMI_CLOSE,
+    LMI_COUNT,
+} lobby_menu_item_t;
+
+static bool lobby_menu_item_selectable(lobby_menu_item_t it) {
+    return it == LMI_REBOOT || it == LMI_CLOSE;
+}
+
+/* Scratch backdrop used while the menu is up — captured at open,
+ * redrawn each menu frame. */
+static uint16_t g_menu_backdrop[128 * 128] __attribute__((aligned(4)));
+
+static void darken_fb_full(uint16_t *fb) {
+    for (int i = 0; i < 128 * 128; ++i) {
+        uint16_t p = fb[i];
+        uint32_t r = (p >> 11) & 0x1F;
+        uint32_t g = (p >>  5) & 0x3F;
+        uint32_t b = (p      ) & 0x1F;
+        r >>= 2; g >>= 2; b >>= 2;
+        fb[i] = (uint16_t)((r << 11) | (g << 5) | b);
+    }
+}
+
+static void draw_thin_bar(int x, int y, int w, int h,
+                          int value, int vmax, uint16_t fg, uint16_t bg) {
+    for (int yy = y; yy < y + h; ++yy)
+        for (int xx = x; xx < x + w; ++xx)
+            g_fb[yy * 128 + xx] = bg;
+    if (vmax <= 0) return;
+    int v = value < 0 ? 0 : (value > vmax ? vmax : value);
+    int fill_w = (w * v) / vmax;
+    for (int yy = y; yy < y + h; ++yy)
+        for (int xx = x; xx < x + fill_w; ++xx)
+            g_fb[yy * 128 + xx] = fg;
+}
+
+static void fmt_kb(char *out, size_t cap, uint32_t kb) {
+    if (cap < 8) { if (cap) *out = 0; return; }
+    if (kb >= 1024) {
+        uint32_t whole = kb / 1024;
+        uint32_t tenths = (kb % 1024) * 10 / 1024;
+        snprintf(out, cap, "%u.%uMB", (unsigned)whole, (unsigned)tenths);
+    } else {
+        snprintf(out, cap, "%uKB", (unsigned)kb);
+    }
+}
+
+#ifndef THUMBYONE_FW_VERSION
+#define THUMBYONE_FW_VERSION "dev"
+#endif
+
+static void render_lobby_menu(int cursor) {
+    memcpy(g_fb, g_menu_backdrop, sizeof(g_fb));
+
+    /* Orange title bar. */
+    for (int y = 0; y < 10; ++y)
+        for (int x = 0; x < 128; ++x)
+            g_fb[y * 128 + x] = L_COL_BG;
+    for (int x = 0; x < 128; ++x) g_fb[10 * 128 + x] = L_COL_MENU_TITLE;
+    nes_font_draw(g_fb, "MENU", 2, 2, L_COL_MENU_TITLE);
+
+    /* Info rows. */
+    int y = 14;
+    const int row_h = 10;
+    const int bar_w = 112;
+
+    /* Battery */
+    {
+        int pct = battery_percent();
+        bool chg = battery_charging();
+        float v = battery_voltage();
+        char val[20];
+        if (chg) {
+            snprintf(val, sizeof(val), "CHRG %d.%02dV",
+                     (int)v, (int)((v - (int)v) * 100.0f + 0.5f));
+        } else {
+            snprintf(val, sizeof(val), "%d%% %d.%02dV", pct,
+                     (int)v, (int)((v - (int)v) * 100.0f + 0.5f));
+        }
+        uint16_t col = chg ? L_COL_HIGHLT
+                           : (pct < 15 ? 0xF800 : L_COL_TEXT);
+        int cursor_here = (cursor == LMI_BATT);
+        if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
+        nes_font_draw(g_fb, "batt", 4, y, L_COL_DIM);
+        int vw = nes_font_width(val);
+        nes_font_draw(g_fb, val, 128 - vw - 4, y, col);
+        draw_thin_bar(8, y + 7, bar_w, 2, pct, 100,
+                      L_COL_HIGHLT, L_COL_BAR_BG);
+        y += row_h;
+    }
+
+    /* Disk */
+    {
+        uint32_t free_kb = 0, total_kb = 0;
+        disk_stats_kb(&free_kb, &total_kb);
+        char fv[10], tv[10];
+        fmt_kb(fv, sizeof(fv), free_kb);
+        fmt_kb(tv, sizeof(tv), total_kb);
+        char val[24];
+        snprintf(val, sizeof(val), "%s/%s", fv, tv);
+        int cursor_here = (cursor == LMI_DISK);
+        if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
+        nes_font_draw(g_fb, "disk", 4, y, L_COL_DIM);
+        int vw = nes_font_width(val);
+        nes_font_draw(g_fb, val, 128 - vw - 4, y, L_COL_TEXT);
+        draw_thin_bar(8, y + 7, bar_w, 2,
+                      (int)free_kb,
+                      total_kb > 0 ? (int)total_kb : 1,
+                      L_COL_HIGHLT, L_COL_BAR_BG);
+        y += row_h;
+    }
+
+    /* USB — verbose state */
+    {
+        const char *val;
+        uint16_t col = L_COL_TEXT;
+        switch (g_usb_row_state) {
+        case USB_ROW_ACTIVE: val = "transferring"; col = L_COL_ACCENT; break;
+        case USB_ROW_READY:  val = "mounted";      col = 0x07FF;        break;
+        case USB_ROW_NONE:
+        default:             val = "unplugged";   col = L_COL_DIM;      break;
+        }
+        int cursor_here = (cursor == LMI_USB);
+        if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
+        nes_font_draw(g_fb, "USB", 4, y, L_COL_DIM);
+        int vw = nes_font_width(val);
+        nes_font_draw(g_fb, val, 128 - vw - 4, y, col);
+        y += row_h;
+    }
+
+    /* Firmware */
+    {
+        const char *val = "ONE " THUMBYONE_FW_VERSION;
+        int cursor_here = (cursor == LMI_FW);
+        if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
+        nes_font_draw(g_fb, "fw", 4, y, L_COL_DIM);
+        int vw = nes_font_width(val);
+        nes_font_draw(g_fb, val, 128 - vw - 4, y, L_COL_TEXT);
+        y += row_h;
+    }
+
+    /* divider */
+    for (int xx = 8; xx < 120; ++xx) g_fb[y * 128 + xx] = L_COL_DIM;
+    y += 4;
+
+    /* Action rows. */
+    const char *labels[] = {
+        [LMI_REBOOT] = "reboot lobby",
+        [LMI_CLOSE]  = "close",
+    };
+    for (int i = LMI_REBOOT; i < LMI_COUNT; ++i) {
+        int cursor_here = (cursor == i);
+        if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
+        uint16_t fg = cursor_here ? L_COL_HIGHLT : L_COL_FG;
+        if (cursor_here) nes_font_draw(g_fb, ">", 1, y, fg);
+        nes_font_draw(g_fb, labels[i], 8, y, fg);
+        y += row_h;
+    }
+
+    /* Footer. */
+    for (int xx = 0; xx < 128; ++xx) g_fb[120 * 128 + xx] = L_COL_MENU_TITLE;
+    const char *hint =
+        (cursor == LMI_REBOOT) ? "A: reboot" :
+        (cursor == LMI_CLOSE)  ? "A: close"  :
+                                 "A: select  B: close";
+    int hw = nes_font_width(hint);
+    nes_font_draw(g_fb, hint, (128 - hw) / 2, 122, L_COL_DIM);
+
+    nes_lcd_present(g_fb);
+    nes_lcd_wait_idle();
+}
+
+static void lobby_menu_seek(int *cursor, int dir) {
+    int start = *cursor;
+    for (int tries = 0; tries < LMI_COUNT; ++tries) {
+        *cursor = (*cursor + dir + LMI_COUNT) % LMI_COUNT;
+        if (lobby_menu_item_selectable(*cursor)) return;
+    }
+    *cursor = start;
+}
+
+/* Run the menu. Returns true if user picked Reboot; false on close. */
+static bool lobby_menu_open(void) {
+    memcpy(g_menu_backdrop, g_fb, sizeof(g_fb));
+    darken_fb_full(g_menu_backdrop);
+    int cursor = LMI_REBOOT;
+    bool prev_up = btn_up_pressed();
+    bool prev_down = btn_down_pressed();
+    bool prev_left = btn_left_pressed();
+    bool prev_right = btn_right_pressed();
+    bool prev_a = btn_a_pressed();
+    bool prev_b = btn_b_pressed();
+    bool prev_menu = btn_menu_pressed();
+    (void)prev_left; (void)prev_right;
+
+    render_lobby_menu(cursor);
+
+    while (1) {
+        lobby_usb_task();   /* keep MSC responsive even with menu up */
+
+        bool up = btn_up_pressed();
+        bool down = btn_down_pressed();
+        bool a = btn_a_pressed();
+        bool b = btn_b_pressed();
+        bool mb = btn_menu_pressed();
+
+        bool dirty = false;
+        if (up && !prev_up) {
+            int newc = cursor;
+            lobby_menu_seek(&newc, -1);
+            if (newc != cursor) { cursor = newc; dirty = true; }
+        }
+        if (down && !prev_down) {
+            int newc = cursor;
+            lobby_menu_seek(&newc, +1);
+            if (newc != cursor) { cursor = newc; dirty = true; }
+        }
+
+        if (a && !prev_a) {
+            if (cursor == LMI_REBOOT) return true;
+            if (cursor == LMI_CLOSE)  return false;
+        }
+        if ((b && !prev_b) || (mb && !prev_menu)) return false;
+
+        prev_up = up; prev_down = down; prev_a = a; prev_b = b; prev_menu = mb;
+
+        if (dirty) render_lobby_menu(cursor);
+        sleep_ms(16);
+    }
+}
+
 int main(void) {
     /* Boot-time escape hatch: init the MENU button FIRST so we can
      * check it before the handoff. Holding MENU at power-on bypasses
@@ -685,23 +1003,34 @@ int main(void) {
         /* Debounce: record intent on press, but defer the actual
          * handoff until the button is released AND no MSC activity
          * has happened in the last 500 ms. A launches the cursor
-         * tile; MENU reboots the lobby. */
+         * tile; MENU opens the info overlay (battery / disk /
+         * USB / fw + reboot + close). */
         if (pending_slot < 0) {
             if (btn_a_pressed() && g_grid_slot_present[g_grid_cursor]) {
                 pending_slot = (int)g_grid_slot_order[g_grid_cursor];
-            } else if (btn_menu_pressed()) {
-                pending_slot = -2;   /* reboot lobby */
-            }
-            if (pending_slot != -1) {
                 pending_since_us = (uint64_t)time_us_64();
+            } else if (btn_menu_pressed()) {
+                /* Wait for release so MENU-press is distinct from
+                 * a MENU-held-at-boot recovery. */
+                while (btn_menu_pressed()) { lobby_usb_task(); sleep_ms(5); }
+                if (lobby_menu_open()) {
+                    /* User picked "Reboot lobby" — set the pending
+                     * slot and let the main debounce do the rest. */
+                    pending_slot = -2;
+                    pending_since_us = (uint64_t)time_us_64();
+                } else {
+                    /* Menu closed — redraw home and carry on. */
+                    render_home();
+                }
             }
         }
 
         if (pending_slot != -1) {
-            /* Wait for release. Pump USB while we wait. */
-            bool still_held =
-                (pending_slot == -2 && btn_menu_pressed()) ||
-                (pending_slot != -2 && btn_a_pressed());
+            /* Wait for release. Pump USB while we wait. MENU-initiated
+             * reboot (-2) goes through the menu now, so by the time
+             * we reach here the MENU button is already released —
+             * just wait for quiet + stable. */
+            bool still_held = (pending_slot != -2 && btn_a_pressed());
             if (!still_held) {
                 /* Wait for USB to go quiet (500 ms since last op) so
                  * any in-flight host write has completed before we
