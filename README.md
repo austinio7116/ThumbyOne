@@ -541,8 +541,7 @@ Drop replacement PNGs into `lobby/icons/` (same filenames: `nes.png`, `p8.png`, 
 
 ## Known limits / future work
 
-- **Hold-MENU overlay in MPY games.** Games own the LCD + button polling once they're running, so cooperative UI from our side isn't trivial. The background watchdog already reboots on 2 s MENU-hold; turning that into an overlay with a "Back to lobby" confirm + battery/fw widgets is the next piece of polish.
-- **Cross-slot chord for DOOM.** DOOM's in-game Quit menu now returns to the lobby, and MENU-long-hold works for MPY/NES/P8. DOOM doesn't honour a long-hold chord yet — user has to go through the menu.
+- **Cross-slot chord for DOOM.** DOOM's in-game Quit menu returns to the lobby, and MENU-long-hold works for MPY/NES/P8. DOOM doesn't honour a long-hold chord yet — user has to go through the menu.
 
 ## Repo layout
 

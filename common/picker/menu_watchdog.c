@@ -218,14 +218,22 @@ static void overlay_run(void) {
     nes_lcd_backlight(1);
 
     int cursor = OVL_ITEM_LOBBY;
-    bool prev_a = btn(A_PIN);
-    bool prev_b = btn(B_PIN);
-    bool prev_up = btn(UP_PIN);
-    bool prev_down = btn(DOWN_PIN);
-    bool prev_menu = btn(MENU_PIN);
+    /* The menu opened because MENU was HELD, so initialise prev_menu
+     * to 'pressed' and wait for the actual release before reading
+     * any other prev_. This avoids auto-closing on the MENU release
+     * that the user hasn't issued yet. */
+    bool prev_a = false;
+    bool prev_b = false;
+    bool prev_up = false;
+    bool prev_down = false;
 
     draw_overlay(cursor);
 
+    /* Wait for the opening MENU hold to end so we don't mistake
+     * that release for a "cancel overlay" gesture. */
+    while (btn(MENU_PIN)) busy_wait_ms(10);
+
+    uint32_t tick = 0;
     while (1) {
         bool a = btn(A_PIN);
         bool b = btn(B_PIN);
@@ -246,13 +254,40 @@ static void overlay_run(void) {
                 break;   /* resume */
             }
         }
-        if ((b && !prev_b) || (!m && prev_menu)) {
-            break;   /* resume */
+        /* Only B or a fresh MENU press cancels (MENU toggles the
+         * overlay closed). Ignore MENU release — the opening hold
+         * is over by now. */
+        if (b && !prev_b) break;
+        if (m && !prev_up) {
+            /* reserved: fresh MENU-press while overlay is up —
+             * same as B. */
         }
 
-        prev_a = a; prev_b = b; prev_up = u; prev_down = d; prev_menu = m;
-        if (dirty) draw_overlay(cursor);
-        busy_wait_ms(20);
+        prev_a = a; prev_b = b; prev_up = u; prev_down = d;
+        (void)m;
+
+        /* Tiny "loop alive" heartbeat in the top-right of the title
+         * bar — cycles through 4 pixel positions so we can visually
+         * tell if the loop is running even when no input has been
+         * detected. If it's animating but nothing else happens,
+         * we've proved the freeze is in input detection rather than
+         * the loop itself. */
+        tick++;
+        const uint16_t blip_on  = 0x07E0;
+        const uint16_t blip_off = 0x0000;
+        for (int k = 0; k < 4; ++k) {
+            bool on = (k == (int)(tick & 3));
+            g_ovl_fb[2 * 128 + (120 + k)] = on ? blip_on : blip_off;
+        }
+
+        if (dirty) {
+            draw_overlay(cursor);
+        } else {
+            /* Push just enough fb to show the tick. */
+            nes_lcd_present(g_ovl_fb);
+            nes_lcd_wait_idle();
+        }
+        busy_wait_ms(50);
     }
 
     /* Resume path: hand the LCD back to the engine. Engine's next
