@@ -11,6 +11,7 @@
 
 #include "pico/stdlib.h"
 #include "pico/bootrom.h"
+#include "pico/platform/sections.h"
 #include "hardware/watchdog.h"
 #include "hardware/structs/watchdog.h"
 #include "hardware/structs/qmi.h"
@@ -67,20 +68,77 @@
     (QMI_M0_RFMT_SUFFIX_LEN_VALUE_8   << QMI_M0_RFMT_SUFFIX_LEN_LSB)   |        \
     (TBYONE_WAIT_CYCLES               << QMI_M0_RFMT_DUMMY_LEN_LSB))
 
-/* Re-apply fast-XIP config. Can be called from a startup
- * constructor or after any flash operation that resets QMI.
- * Also exposed in the header for subprojects to call directly. */
-void thumbyone_xip_fast_setup(void) {
+/* Re-apply fast-XIP config.
+ *
+ * Runs from RAM (__not_in_flash_func) and not inlined, because
+ * it reconfigures the very QMI peripheral the CPU is fetching
+ * instructions through. Same reason pico-sdk's boot_stage2
+ * executes from SRAM.
+ *
+ * Handles ANY prior flash state: on cold boot flash is in its
+ * power-on default (expecting a command prefix), but after
+ * rom_chain_image the lobby's boot_stage2 has already put flash
+ * into CONTINUOUS-READ mode (no prefix expected). If we naively
+ * send an EBh-prefix transaction while flash is in continuous
+ * read, the 0xEB byte gets interpreted as address/mode bits —
+ * flash ends up in an unpredictable state that depends on the
+ * exact bits of the address + mode bytes that follow. That's
+ * what made this function's success depend on binary layout
+ * (NES big / P8 small / DOOM huge all had different follow-on
+ * bytes). The FIX: explicitly reset the flash chip out of
+ * continuous-read mode FIRST via the W25Q 66h/99h reset pair,
+ * then configure XIP from a known clean state. */
+void __not_in_flash_func(thumbyone_xip_fast_setup)(void)
+    __attribute__((noinline));
+
+void __not_in_flash_func(thumbyone_xip_fast_setup)(void) {
+    /* ---- Step 1: reset flash out of whatever state it's in ----
+     * Enable QMI direct mode so we can send raw commands.
+     * CLKDIV = 30 is conservative (~5 MHz at 150 MHz clk_sys)
+     * matching boot_stage2's INIT_DIRECT_CSR. */
+    qmi_hw->direct_csr = (30u << QMI_DIRECT_CSR_CLKDIV_LSB)
+                       | QMI_DIRECT_CSR_EN_BITS
+                       | QMI_DIRECT_CSR_AUTO_CS0N_BITS;
+    /* Wait for any in-flight XIP transaction to drain (cooldown). */
+    while (qmi_hw->direct_csr & QMI_DIRECT_CSR_BUSY_BITS) {
+        tight_loop_contents();
+    }
+
+    /* Send 66h (enable-reset) then 99h (reset). Flash is now in
+     * its power-on state regardless of whether it was in
+     * continuous-read, command-mode, or mid-transaction. These
+     * bytes go out via the current interface — if flash is in
+     * 4-line mode, the QMI sends 4-line; if 1-line, 1-line. The
+     * reset command is defined to be recognised on any width. */
+    qmi_hw->direct_tx = 0x66u;
+    while (qmi_hw->direct_csr & QMI_DIRECT_CSR_BUSY_BITS) {
+        tight_loop_contents();
+    }
+    (void)qmi_hw->direct_rx;
+    qmi_hw->direct_tx = 0x99u;
+    while (qmi_hw->direct_csr & QMI_DIRECT_CSR_BUSY_BITS) {
+        tight_loop_contents();
+    }
+    (void)qmi_hw->direct_rx;
+
+    /* Flash datasheet: ~30 us tRST after the reset command. Burn
+     * a conservative 100 us with direct-mode idle. */
+    for (volatile int i = 0; i < 3000; ++i) { __asm__ volatile("nop"); }
+
+    /* Disable direct mode. */
+    qmi_hw->direct_csr = 0;
+
+    /* ---- Step 2: configure fast QPI XIP on the now-clean flash. */
     qmi_hw->m[0].timing = TBYONE_M0_TIMING;
     qmi_hw->m[0].rcmd   = TBYONE_M0_RCMD;
     qmi_hw->m[0].rfmt   = TBYONE_M0_RFMT_WITH_PREFIX;
-    /* Dummy read to transition flash into continuous-read mode
-     * (first transfer carries the 0xEB prefix; flash then latches
-     * the A0h mode bits so subsequent transfers skip the prefix). */
+    /* Dummy read: flash is in clean state so the EBh prefix is
+     * parsed correctly, address + mode bits + dummy + data cycle
+     * puts flash into continuous-read mode with A0h latched. */
     volatile uint32_t dummy = *(volatile uint32_t *)XIP_NOCACHE_NOALLOC_BASE;
     (void)dummy;
-    /* Drop the command prefix — flash no longer wants it while
-     * in continuous-read mode. */
+    /* Drop the command prefix — subsequent reads rely on the
+     * continuous-read mode bits flash just latched. */
     qmi_hw->m[0].rfmt = TBYONE_M0_RFMT_WITH_PREFIX
                         & ~QMI_M0_RFMT_PREFIX_LEN_BITS;
     __asm__ volatile("dsb" ::: "memory");
