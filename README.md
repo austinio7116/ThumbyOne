@@ -144,7 +144,7 @@ No driver weirdness, no Windows Format dialog, no `mpremote` incantations. LB + 
   <img src="docs/screenshots/nes-menu.jpg" width="240" alt="In-game menu overlay">
 </p>
 
-A four-in-one retro emulator running Nofrendo (NES/SMS/GG) and a DMG Game Boy core. Drop `.nes`, `.sms`, `.gg`, or `.gb` into `/roms/`; the tabbed picker groups them by system, shows thumbnails and metadata, and lets you favourite.
+A four-in-one retro emulator running Nofrendo for NES, smsplus for Master System + Game Gear, and Peanut-GB (with minigb_apu) for Game Boy DMG. Drop `.nes`, `.sms`, `.gg`, or `.gb` into `/roms/`; the tabbed picker groups them by system, shows thumbnails and metadata, and lets you favourite.
 
 <p align="center">
   <img src="docs/screenshots/nes-sms.jpg" width="240" alt="Sonic on Master System">
@@ -404,7 +404,11 @@ Slots carry no tinyUSB stack at all in ThumbyOne-slot-mode builds. We strip tiny
 
 ### NES / SMS / GG / GB slot
 
-- **Emulator cores**: Nofrendo for NES/SMS/GG (GPLv2, vendored in [`ThumbyNES/vendor/nofrendo`](https://github.com/austinio7116/ThumbyNES/tree/main/vendor/nofrendo)); custom Game Boy core.
+- **Emulator cores** (all vendored under [`ThumbyNES/vendor/`](https://github.com/austinio7116/ThumbyNES/tree/main/vendor)):
+  - **Nofrendo** (GPLv2) — NES 6502 + PPU + APU.
+  - **smsplus** (GPLv2, from the retro-go fork) — Master System / Game Gear Z80 + VDP + PSG.
+  - **Peanut-GB** (MIT) — Game Boy DMG core.
+  - **minigb_apu** (MIT) — Game Boy 4-channel APU, paired with Peanut-GB.
 - **ROM load path**: picker walks the FAT cluster chain, computes the XIP address of a contiguous ROM file, hands nofrendo a direct pointer — zero-copy `.nes` mmap. Fragmented ROMs fall back to malloc; the picker runs an on-demand defragmenter when it detects them.
 - **Audio**: PWM + DMA-driven sample push; 22050 Hz, configurable per-ROM overclock for cores that need more than the default 250 MHz.
 - **LCD**: 128×128 GC9107 on SPI0 + DMA, bottom-up push per frame. `nes_lcd_teardown()` releases SPI and DMA cleanly before rom_chain (BAD things happen if the panel is mid-DMA when the bootrom reconfigures QMI).
@@ -577,17 +581,34 @@ ThumbyOne/
 
 ## Acknowledgements
 
-ThumbyOne stitches together a lot of work by a lot of people:
+ThumbyOne stitches together a lot of work by a lot of people.
+
+### The slot firmwares
+
+Each system in ThumbyOne is a complete standalone firmware in its own repo; ThumbyOne just composes them. Full docs + standalone builds live at:
+
+- **[ThumbyNES](https://github.com/austinio7116/ThumbyNES)** — NES / SMS / GG / Game Boy emulator
+- **[ThumbyP8](https://github.com/austinio7116/P8Thumb)** — PICO-8 fantasy console
+- **[ThumbyDOOM](https://github.com/austinio7116/ThumbyDOOM)** — shareware DOOM
+- **[TinyCircuits-Tiny-Game-Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine)** (austinio7116 fork) — MicroPython + engine slot
+- **[mp-thumby](https://github.com/austinio7116/micropython)** (`thumbyone-slot` branch) — MicroPython port with the ThumbyOne hooks
+
+All built by [austinio7116](https://github.com/austinio7116) before ThumbyOne existed. ThumbyOne is the binder; the systems are the books.
+
+### The upstream projects the slots stand on
 
 - **[TinyCircuits](https://tinycircuits.com/)** — made the Thumby Color.
-- **[Tiny Game Engine](https://github.com/TinyCircuits/TinyCircuits-Tiny-Game-Engine)** — the original C engine + MicroPython port.
-- **[Nofrendo](https://github.com/TheDuckEmulates/nofrendo)** — the NES/SMS/GG core that powers the ThumbyNES slot.
-- **[rp2040-doom](https://github.com/kilograham/rp2040-doom)** — Graham Sanderson's tour-de-force DOOM port.
-- **[Lexaloffle](https://www.lexaloffle.com/)** — creators of PICO-8.
+- **[Tiny Game Engine](https://github.com/TinyCircuits/TinyCircuits-Tiny-Game-Engine)** — original C engine + MicroPython port.
+- **Emulator cores in ThumbyNES:**
+  - **[Nofrendo](https://github.com/TheDuckEmulates/nofrendo)** — NES 6502 + PPU + APU.
+  - **[smsplus](https://github.com/ducalex/retro-go)** (from the retro-go fork of Charles MacDonald's original) — Master System / Game Gear Z80 + VDP + PSG.
+  - **[Peanut-GB](https://github.com/deltabeard/Peanut-GB)** — Game Boy DMG core.
+  - **[minigb_apu](https://github.com/baines/MiniGBS)** — Game Boy APU, paired with Peanut-GB.
+- **[rp2040-doom](https://github.com/kilograham/rp2040-doom)** — Graham Sanderson's tour-de-force DOOM port (Chocolate Doom → RP2040/RP2350).
+- **[Lexaloffle](https://www.lexaloffle.com/)** — creators of PICO-8. ThumbyP8 is a clean-room implementation of the documented API; if you play carts you like, [buy PICO-8](https://www.lexaloffle.com/pico-8.php) to support the creators and the community.
 - **[MicroPython](https://micropython.org/)** — Damien George and contributors.
 - **[Pico SDK](https://github.com/raspberrypi/pico-sdk)** and **[tinyUSB](https://github.com/hathach/tinyusb)** — the backbone of every RP2xxx project.
-
-The individual slot firmwares — ThumbyNES, ThumbyP8, ThumbyDOOM — were built by [austinio7116](https://github.com/austinio7116) before ThumbyOne existed. ThumbyOne is the binder; the systems are the books.
+- **[FatFs](http://elm-chan.org/fsw/ff/00index_e.html)** (ChaN) — the shared filesystem across every slot.
 
 ---
 
