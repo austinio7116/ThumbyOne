@@ -303,10 +303,15 @@ static usb_row_state_t g_usb_row_state = USB_ROW_NONE;
 #define USB_LABEL_X 103   /* "USB" text just left of the LED */
 
 static void draw_usb_row(usb_row_state_t st) {
-    /* Repaint only the right-hand header strip. */
-    for (int y = 0; y < 11; ++y)
+    /* Repaint only the right-hand header strip. Fill with the navy
+     * bar colour (COL_BAR_BG, defined later in the file — use the
+     * literal here so this function doesn't need the forward decl).
+     * 0x0008 matches COL_BAR_BG — keep in sync if the palette
+     * changes. */
+    for (int y = 0; y < 10; ++y)
         for (int x = 100; x < 128; ++x)
-            g_fb[y * 128 + x] = COL_BG;
+            g_fb[y * 128 + x] = 0x0008;
+    /* Preserve the cyan accent line at y=10. */
 
     uint16_t led_col;
     uint16_t lbl_col;
