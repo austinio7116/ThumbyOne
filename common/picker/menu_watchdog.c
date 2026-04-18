@@ -41,8 +41,8 @@
 #define BATT_GPIO   29
 #define BATT_ADC    3
 
-#define POLL_PERIOD_MS   20
-#define HOLD_MS         500
+#define POLL_PERIOD_MS    20
+#define HOLD_MS         5000       /* 5 s — deliberate reboot gesture */
 #define HOLD_TICKS      (HOLD_MS / POLL_PERIOD_MS)
 
 /* --- palette (matches lobby / picker menus) ----------------------- */
