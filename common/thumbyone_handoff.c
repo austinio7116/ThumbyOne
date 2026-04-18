@@ -253,8 +253,26 @@ void thumbyone_handoff_request_slot(thumbyone_slot_t slot) {
 
 void thumbyone_handoff_request_lobby(void) {
     thumbyone_handoff_clear();
-    watchdog_reboot(0, 0, 0);
-    while (1) tight_loop_contents();  /* unreachable */
+
+    /* Must use rom_reboot, NOT watchdog_reboot. The MPY slot wraps
+     * watchdog_reboot with `__wrap_watchdog_reboot` so that calls
+     * like engine.reset() (which the MicroPython runtime implements
+     * via a bare watchdog_reboot) are routed back into the MPY
+     * slot — the wrap calls thumbyone_handoff_prepare_slot(MPY)
+     * before rebooting. If we used watchdog_reboot here we'd
+     * accidentally trigger that wrap too, so "back to lobby" would
+     * clear the scratch then instantly set it to MPY → reboot →
+     * lobby chains into MPY → user never escapes the slot.
+     * rom_reboot isn't wrapped, so the cleared scratch survives. */
+    rom_reboot(
+        REBOOT2_FLAG_REBOOT_TYPE_NORMAL
+          | REBOOT2_FLAG_NO_RETURN_ON_SUCCESS,
+        10, 0, 0
+    );
+
+    /* Unreachable — last-resort fallback. */
+    reset_usb_boot(0, 0);
+    while (1) tight_loop_contents();
 }
 
 

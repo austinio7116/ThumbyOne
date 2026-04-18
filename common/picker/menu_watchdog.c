@@ -58,7 +58,7 @@
 
 /* --- build-time firmware tag ------------------------------------- */
 #ifndef THUMBYONE_FW_VERSION
-#define THUMBYONE_FW_VERSION "dev"
+#define THUMBYONE_FW_VERSION "1.0"
 #endif
 
 /* --- state ------------------------------------------------------- */
