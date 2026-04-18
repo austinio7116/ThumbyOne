@@ -70,7 +70,7 @@ That's it. On first boot the shared FAT is formatted automatically (you'll see a
 The lobby is the home screen. It's a 2×2 grid of system icons: NES, PICO-8, DOOM, and MicroPython. Move with the **d-pad**, press **A** to launch.
 
 <p align="center">
-  <em>(Lobby grid screenshot coming — it's the first thing you see on boot.)</em>
+  <img src="docs/screenshots/lobby.jpg" width="480" alt="ThumbyOne lobby — 2x2 system grid">
 </p>
 
 **Controls:**
@@ -244,7 +244,8 @@ The real deal. Music, sound effects, save games, screen melts, all on a 128×128
 *The stock Thumby Color experience — [TinyCircuits-Tiny-Game-Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine) plus MicroPython.*
 
 <p align="center">
-  <em>(Hero-picker + menu overlay screenshots coming — they match the NES-picker style.)</em>
+  <img src="docs/screenshots/mpy-picker.jpg" width="380" alt="MPY hero picker — DeepThumb">
+  <img src="docs/screenshots/mpy-menu.jpg"   width="380" alt="MPY menu overlay">
 </p>
 
 MicroPython with the Tiny Game Engine C module baked in, running a custom C picker that replaces the stock launcher entirely. Drop a game folder into `/games/<GameName>/` with a `main.py`, an `icon.bmp`, and an `arcade_description.txt`, and it appears on the hero picker with full artwork, title, and blurb.
