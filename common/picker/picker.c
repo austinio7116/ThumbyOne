@@ -83,10 +83,21 @@
 #define COL_ERR      0xF800   /* red — FS error screen           */
 
 /* --- buffers ----------------------------------------------------- */
-static uint16_t g_fb[128 * 128] __attribute__((aligned(4)));
+/* These large picker-only buffers live in the .picker_scratch linker
+ * section (defined in memmap_mp_rp2350.ld), which is positioned at
+ * the start of the MicroPython GC heap range. They hold data only
+ * during the pre-mp_init picker; once gc_init() claims the heap,
+ * these bytes are reclaimed as free memory with no code change
+ * needed. This saves ~42 KB of otherwise-wasted BSS in the MPY slot.
+ * Non-slot builds put nothing in this section, so it's a no-op
+ * for standalone MicroPython. */
+#define PICKER_SCRATCH_ATTR \
+    __attribute__((section(".picker_scratch"), aligned(4)))
+
+static uint16_t g_fb[128 * 128] PICKER_SCRATCH_ATTR;
 
 #define ICON_MAX    64
-static uint16_t g_icon_px[ICON_MAX * ICON_MAX] __attribute__((aligned(4)));
+static uint16_t g_icon_px[ICON_MAX * ICON_MAX] PICKER_SCRATCH_ATTR;
 static int      g_icon_w;
 static int      g_icon_h;
 
@@ -112,7 +123,7 @@ typedef struct {
     bool favourite;
 } picker_game_t;
 
-static picker_game_t g_games[MAX_GAMES];
+static picker_game_t g_games[MAX_GAMES] PICKER_SCRATCH_ATTR;
 static int g_game_count = 0;
 /* Ordered indices into g_games[]. Sort operations rewrite this
  * without touching the underlying records — keeps favourites +
@@ -170,7 +181,11 @@ static bool g_menu_lobby_requested = false;
  * behind the menu panel. Filled once on menu-open so each subsequent
  * redraw can restore from a clean dimmed frame without re-rendering
  * the hero view (which would also repaint over the panel). */
-static uint16_t g_menu_backdrop[128 * 128] __attribute__((aligned(4)));
+/* Menu backdrop is synthesised on demand (re-render hero → darken
+ * in place inside g_fb) rather than cached in its own 32 KB BSS
+ * buffer. The redraw cost is trivial vs. the RAM saving — 32 KB
+ * goes back to the MicroPython GC heap, which matters for games
+ * that import-heavy at startup (Thumbalaga etc.). */
 
 /* --- button helpers --------------------------------------------- */
 static bool btn(uint pin) { return !gpio_get(pin); }
@@ -990,8 +1005,11 @@ static const char *menu_label(menu_item_t it) {
 }
 
 static void render_menu(int sel) {
-    /* Restore backdrop (darkened hero view, captured on menu-open). */
-    memcpy(g_fb, g_menu_backdrop, sizeof(g_fb));
+    /* Synthesise the backdrop: re-render the hero into g_fb, then
+     * darken in place. Saves the 32 KB cache buffer we used to
+     * keep for this. */
+    render_hero(sel);
+    darken_fb(g_fb);
 
     /* Title bar — black strip with orange underline. */
     fb_rect(0, 0, 128, M_TITLE_H, COL_BG);
@@ -1270,10 +1288,6 @@ int thumbyone_picker_run(void) {
             }
 
             if (just_pressed(PIN_MENU, &prev_menu)) {
-                /* Capture + darken the current hero frame as the
-                 * menu backdrop. Cheap — one pass over 32 KB. */
-                memcpy(g_menu_backdrop, g_fb, sizeof(g_fb));
-                darken_fb(g_menu_backdrop);
                 g_menu_open = true;
                 g_menu_cursor = MI_SORT;
                 render_menu(sel);
