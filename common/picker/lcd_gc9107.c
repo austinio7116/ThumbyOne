@@ -72,9 +72,9 @@ void nes_lcd_init(void) {
     gpio_init(PIN_BL);  gpio_set_dir(PIN_BL,  GPIO_OUT); gpio_put(PIN_BL,  0);
 
     /* Hardware reset pulse */
-    sleep_ms(5);
-    gpio_put(PIN_RST, 0); sleep_ms(50);
-    gpio_put(PIN_RST, 1); sleep_ms(120);
+    busy_wait_ms(5);
+    gpio_put(PIN_RST, 0); busy_wait_ms(50);
+    gpio_put(PIN_RST, 1); busy_wait_ms(120);
 
     /* Inter-register enable */
     lcd_cmd(0xFE, NULL, 0);
@@ -116,9 +116,9 @@ void nes_lcd_init(void) {
     }, 14);
 
     lcd_cmd(0x11, NULL, 0);   /* SLPOUT */
-    sleep_ms(120);
+    busy_wait_ms(120);
     lcd_cmd(0x29, NULL, 0);   /* DISPON */
-    sleep_ms(10);
+    busy_wait_ms(10);
 
     /* DMA channel for SPI TX */
     dma_ch = dma_claim_unused_channel(true);

@@ -775,9 +775,10 @@ static void render_hero(int sel) {
                      (128 - tw) / 2, title_y,
                      real >= 0 && g_games[real].favourite ? COL_ACCENT : COL_FG);
 
-    /* Blurb: up to 3 wrapped lines below the title. */
+    /* Blurb: up to 3 wrapped lines below the title. Top-capped at
+     * y=116 so it doesn't bleed into the footer bar below. */
     int blurb_y = title_y + 12;
-    int blurb_max_y = 118;
+    int blurb_max_y = 116;
     int blurb_rows = (blurb_max_y - blurb_y) / 7;
     if (blurb_rows > 3) blurb_rows = 3;
 
@@ -797,7 +798,15 @@ static void render_hero(int sel) {
                   draw_body_line, NULL);
     }
 
-    nes_font_draw(g_fb, "A play B fav MENU", 6, 121, COL_DIM);
+    /* Footer bar — mirrors the lobby style: navy strip at y=119..127
+     * with a cyan accent line at y=118 and the action hint in cyan
+     * centred on the navy. Keeps every ThumbyOne screen visually
+     * consistent. */
+    fb_rect(0, 119, 128, 9, 0x0008);             /* navy */
+    fb_hline(0, 118, 128, COL_HEAD);             /* cyan accent */
+    const char *hint = "A play B fav MENU";
+    int hw = nes_font_width(hint);
+    nes_font_draw(g_fb, hint, (128 - hw) / 2, 121, COL_HEAD);
 
     present_blocking();
 }

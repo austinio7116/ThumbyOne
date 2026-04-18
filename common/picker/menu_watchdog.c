@@ -252,7 +252,7 @@ static void overlay_run(void) {
 
         prev_a = a; prev_b = b; prev_up = u; prev_down = d; prev_menu = m;
         if (dirty) draw_overlay(cursor);
-        sleep_ms(20);
+        busy_wait_ms(20);
     }
 
     /* Resume path: hand the LCD back to the engine. Engine's next
@@ -261,7 +261,7 @@ static void overlay_run(void) {
 
     /* Drain any still-held buttons so the game doesn't see the press
      * that closed the overlay. */
-    while (btn(A_PIN) || btn(B_PIN) || btn(MENU_PIN)) sleep_ms(10);
+    while (btn(A_PIN) || btn(B_PIN) || btn(MENU_PIN)) busy_wait_ms(10);
 
     g_overlay_active = false;
 }

@@ -538,15 +538,11 @@ static void render_home(void) {
         nes_font_draw(g_fb, label, (128 - lw) / 2, 121, col);
     }
 
-    /* Paint the USB indicator into the top-right strip using the
-     * current state. This does NOT re-sample or re-drive the LED —
-     * those are owned by the main loop's USB state machine, which
-     * only updates on a real state change. */
+    /* Paint the USB indicator into the top-right strip. The header
+     * bar is already drawn underneath, so we just place the label +
+     * LED on top of it — no need to re-fill the background. */
     {
         usb_row_state_t st = g_usb_row_state;
-        for (int y = 0; y < 11; ++y)
-            for (int x = 100; x < 128; ++x)
-                g_fb[y * 128 + x] = COL_BAR_BG;
         uint16_t indicator =
             st == USB_ROW_ACTIVE ? COL_USB_BUSY :
             st == USB_ROW_READY  ? COL_USB_ON   :
