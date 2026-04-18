@@ -20,7 +20,7 @@ No per-system re-flashing. No "which firmware is this device running?" No re-for
 ## Contents
 
 - [What you get](#what-you-get)
-- [Getting started](#getting-started)
+- [Quickstart](#quickstart)
 - [The lobby](#the-lobby)
 - [Transferring files](#transferring-files)
 - [Wiping / recovery](#wiping--recovery)
@@ -49,19 +49,65 @@ All four systems share one 9.6 MB FAT drive, visible over USB when you're in the
 
 ---
 
-## Getting started
+## Quickstart
 
-**Download** the latest `thumbyone.uf2` from the [releases](https://github.com/austinio7116/ThumbyOne/releases) (or build from source — see below).
+> ### ⚠️ Before you flash — please read
+>
+> Flashing ThumbyOne **replaces the stock TinyCircuits firmware** with a completely different system. This is a full takeover, not an overlay:
+>
+> - **The TinyCircuits launcher, stock games, and system files will be gone.** The 9.6 MB shared FAT is formatted on first boot of ThumbyOne — anything you had on the device (saves, scores, installed games) is wiped.
+> - The device is easy to flash back to stock afterwards — just drop the official TinyCircuits `.uf2` onto the bootloader drive the same way. If you want to preserve anything from stock first (e.g. save files under `/Saves/`), **back it up now over the stock USB drive**.
+> - ThumbyOne uses its own filesystem layout (`/roms/`, `/carts/`, `/games/`) — stock `/Games/` Python games won't be visible until you move them into `/games/`.
+> - There is **no going back to stock with your data intact** once ThumbyOne has first-booted.
+>
+> If that all sounds fine, carry on.
 
-**Flash it:**
+---
+
+### 1. Flash the firmware
+
+**Download** `firmware_thumbyone.uf2` from the root of this repo (or the latest [release](https://github.com/austinio7116/ThumbyOne/releases)) — or [build from source](#build-matrix).
 
 1. Power off the Thumby Color.
 2. Hold **DOWN** on the d-pad and plug in USB.
-3. The device appears as an `RPI-RP2350` drive.
-4. Drag `thumbyone.uf2` onto it.
-5. The device reboots into ThumbyOne.
+3. The device appears as an `RPI-RP2350` drive on your computer.
+4. Drag `firmware_thumbyone.uf2` onto it.
+5. The device reboots into ThumbyOne. On first boot you'll see a brief "formatting shared FAT..." splash while the new layout is prepared, then the lobby appears.
 
-That's it. On first boot the shared FAT is formatted automatically (you'll see a brief "formatting shared FAT..." splash); subsequent boots drop straight into the lobby.
+### 2. Upload ROMs / carts / games
+
+With ThumbyOne running, plug the device in (while sitting in the **lobby**). It enumerates as a USB drive called **ThumbyOne Storage**. Copy files into the right folder:
+
+| Content | Folder | File types |
+|---|---|---|
+| NES / SMS / GG / GB ROMs | `/roms/` | `.nes`, `.sms`, `.gg`, `.gb`, `.gbc` |
+| PICO-8 carts | `/carts/` | `.p8.png` |
+| MicroPython games | `/games/<Name>/` | Folder per game with `main.py`, `icon.bmp`, `arcade_description.txt`, assets |
+
+**Example:**
+```
+/roms/
+    Super Mario Bros.nes
+    Sonic.gg
+    Tetris.gb
+/carts/
+    celeste.p8.png
+    delunky.p8.png
+/games/
+    DeepThumb/
+        main.py
+        icon.bmp
+        arcade_description.txt
+        assets/
+```
+
+When you're done copying, **eject the drive** (Windows: right-click → Eject; macOS: drag to Trash; Linux: `sync && umount`). The on-screen USB dot turns from blue back to dim-grey; the physical LED goes back to green. Now pick a system with the d-pad and press **A**.
+
+To transfer more files later: from inside any running system, **hold MENU** → back to lobby → plug USB → repeat. See [Transferring files](#transferring-files) for more on the USB state machine and LED indicators.
+
+### 3. Returning to stock
+
+Same procedure as flashing — hold **DOWN** on boot, drop the official [TinyCircuits firmware UF2](https://color.thumby.us/pages/firmware-and-updating/firmware-and-updating/) onto the `RPI-RP2350` drive. The device is back to factory state with a fresh empty FAT; your ThumbyOne data is gone.
 
 ---
 
