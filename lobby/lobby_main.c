@@ -235,8 +235,14 @@ static void led_set_rgb(int r, int g, int b) {
 }
 
 static void led_set_off(void)    { led_set_rgb(0, 0, 0); }
-static void led_set_white(void)  { led_set_rgb(60, 60, 60); } /* default idle */
-static void led_set_green(void)  { led_set_rgb(0, 80, 0); }   /* dim — it's very bright at full */
+/* RGB LED channels aren't perceptually balanced at equal PWM — the
+ * red die is brighter per unit drive than green or blue on this
+ * common-anode module, so (60, 60, 60) reads as pink. Push green
+ * up and red down to land on something that actually looks white.
+ * Total brightness stays "dim" (the LED is painfully bright at
+ * full drive). */
+static void led_set_white(void)  { led_set_rgb(25, 80, 55); }
+static void led_set_green(void)  { led_set_rgb(0, 80, 0); }
 static void led_set_yellow(void) { led_set_rgb(90, 60, 0); }
 
 static void led_setup(void) {
