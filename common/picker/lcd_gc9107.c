@@ -184,3 +184,31 @@ void nes_lcd_teardown(void) {
     unreset_block_mask_wait_blocking(
         RESETS_RESET_SPI0_BITS | RESETS_RESET_DMA_BITS);
 }
+
+void nes_lcd_release(void) {
+    /* Softer than teardown: hands the LCD back to an already-
+     * initialised driver in the same address space (the MPY
+     * engine's GC9107 driver). The engine left SPI0 enabled and
+     * its own DMA channel claimed; we must NOT reset either.
+     *
+     * We do:
+     *   1. Drain our DMA so the panel isn't mid-transfer.
+     *   2. Release our claimed DMA channel (a different one from
+     *      the engine's — dma_claim_unused_channel gave us one of
+     *      the 16 free slots).
+     *   3. Deassert CS so the next command from the engine starts
+     *      a fresh transaction.
+     *   4. Re-enable SPI0 in 16-bit mode. spi_init in our init path
+     *      may have left it in 8-bit after the last command write;
+     *      the engine's present() forces 16-bit via CR0, so this is
+     *      technically redundant but cheap insurance. */
+    nes_lcd_wait_idle();
+    gpio_put(PIN_CS, 1);
+    if (dma_ch >= 0) {
+        dma_channel_abort(dma_ch);
+        dma_channel_cleanup(dma_ch);
+        dma_channel_unclaim(dma_ch);
+        dma_ch = -1;
+    }
+    spi_set_format(LCD_SPI, 16, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);
+}

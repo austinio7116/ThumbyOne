@@ -291,8 +291,12 @@ static void overlay_run(void) {
     }
 
     /* Resume path: hand the LCD back to the engine. Engine's next
-     * present() reconfigures SPI/DMA from its side. */
-    nes_lcd_teardown();
+     * present() will set its own SPI format + window and push
+     * frames using its own DMA channel. We must NOT reset the
+     * SPI0 or DMA peripheral blocks here — that would wipe the
+     * engine's claimed audio + display DMA channels and cause
+     * the engine to hang on its next tick. */
+    nes_lcd_release();
 
     /* Drain any still-held buttons so the game doesn't see the press
      * that closed the overlay. */

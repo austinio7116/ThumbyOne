@@ -70,7 +70,8 @@ That's it. On first boot the shared FAT is formatted automatically (you'll see a
 The lobby is the home screen. It's a 2×2 grid of system icons: NES, PICO-8, DOOM, and MicroPython. Move with the **d-pad**, press **A** to launch.
 
 <p align="center">
-  <img src="docs/screenshots/lobby.jpg" width="480" alt="ThumbyOne lobby — 2x2 system grid">
+  <img src="docs/screenshots/lobby.jpg"      width="380" alt="ThumbyOne lobby — 2x2 system grid">
+  <img src="docs/screenshots/lobby-menu.jpg" width="380" alt="Lobby MENU overlay — battery, disk, USB, firmware">
 </p>
 
 **Controls:**
@@ -79,19 +80,20 @@ The lobby is the home screen. It's a 2×2 grid of system icons: NES, PICO-8, DOO
 |---|---|
 | D-pad | Move selection between the four tiles |
 | **A** | Launch the selected system |
-| **MENU** | Reboot back to lobby (from anywhere) |
+| **MENU** | Open the lobby overlay (battery, disk, USB, firmware, reboot) |
 | **MENU** (held at boot) | Force lobby (bypass any pending slot chain) |
+| **MENU** (held in-game) | Return to lobby — works in NES, P8, and MPY slots |
 | **LB + RB** (held at boot) | Wipe and reformat the shared FAT |
 
 A small **USB** label + LED dot in the top-right corner of the lobby — and the device's physical RGB LED — both show the USB state:
 
 | On-screen dot | Physical LED | Meaning |
 |---|---|---|
-| dim grey | white | USB cable not connected (idle) |
-| green | green | Host has mounted the drive — safe to drop files |
-| yellow | yellow | Transfer in flight — **do not unplug** |
+| dim grey | green | USB cable not connected (idle) |
+| blue | blue | Host has mounted the drive — safe to drop files |
+| red | red | Transfer in flight — **do not unplug** |
 
-The physical LED mirrors the on-screen dot so you can see at a glance whether a transfer is still happening even without looking at the screen. When a copy finishes the LED settles back to green; when you eject or unplug, it goes back to white.
+The physical LED mirrors the on-screen dot so you can see at a glance whether a transfer is still happening even without looking at the screen. When a copy finishes the LED settles back to blue; when you eject or unplug, it goes back to green.
 
 Slot-launch is held off while USB is active: if you're mid-copy and press A, ThumbyOne waits for the FAT to go quiet before handing off, so a half-written file never turns into a corrupt one on the slot.
 
@@ -244,8 +246,12 @@ The real deal. Music, sound effects, save games, screen melts, all on a 128×128
 *The stock Thumby Color experience — [TinyCircuits-Tiny-Game-Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine) plus MicroPython.*
 
 <p align="center">
-  <img src="docs/screenshots/mpy-picker.jpg" width="380" alt="MPY hero picker — DeepThumb">
-  <img src="docs/screenshots/mpy-menu.jpg"   width="380" alt="MPY menu overlay">
+  <img src="docs/screenshots/mpy-picker.jpg"  width="380" alt="MPY hero picker — DeepThumb">
+  <img src="docs/screenshots/mpy-menu.jpg"    width="380" alt="MPY picker menu overlay">
+</p>
+<p align="center">
+  <img src="docs/screenshots/mpy-game.jpg"    width="380" alt="DeepThumb chess — running MPY game">
+  <img src="docs/screenshots/mpy-overlay.jpg" width="380" alt="MPY in-game hold-MENU overlay — back to lobby / resume">
 </p>
 
 MicroPython with the Tiny Game Engine C module baked in, running a custom C picker that replaces the stock launcher entirely. Drop a game folder into `/games/<GameName>/` with a `main.py`, an `icon.bmp`, and an `arcade_description.txt`, and it appears on the hero picker with full artwork, title, and blurb.
@@ -274,6 +280,7 @@ MicroPython with the Tiny Game Engine C module baked in, running a custom C pick
 | A | Launch the selected game |
 | B | Toggle favourite (★) for the highlighted game |
 | MENU | Open info overlay (battery, disk, sort, back to lobby) |
+| MENU (held in-game) | Open the in-game overlay — back to lobby or resume |
 
 **Game structure** in `/games/<name>/`:
 

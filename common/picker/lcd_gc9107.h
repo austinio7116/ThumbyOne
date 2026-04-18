@@ -40,4 +40,12 @@ void nes_lcd_backlight(int on);
  * After teardown, no more nes_lcd_* calls may be made. */
 void nes_lcd_teardown(void);
 
+/* Softer release used when handing the LCD back to an already-
+ * running driver (e.g. the MPY engine's display) rather than to
+ * the bootrom. Waits for our DMA to drain, releases our DMA
+ * channel, and deasserts CS — but does NOT reset the SPI0 or DMA
+ * peripheral blocks. Resetting those would kill the engine's own
+ * DMA channels (audio + display) and wedge it. */
+void nes_lcd_release(void);
+
 #endif
