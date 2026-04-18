@@ -56,7 +56,7 @@ All four systems share one 9.6 MB FAT drive, visible over USB when you're in the
 > Flashing ThumbyOne **replaces the stock TinyCircuits firmware** with a completely different system. This is a full takeover, not an overlay:
 >
 > - **The TinyCircuits launcher, stock games, and system files will be gone.** The 9.6 MB shared FAT is formatted on first boot of ThumbyOne — anything you had on the device (saves, scores, installed games) is wiped.
-> - The device is easy to flash back to stock afterwards — just drop the official TinyCircuits `.uf2` onto the bootloader drive the same way. If you want to preserve anything from stock first (e.g. save files under `/Saves/`), **back it up now over the stock USB drive**.
+> - The device is easy to flash back to stock afterwards — just drop the official TinyCircuits `.uf2` onto the bootloader drive the same way. But stock firmware **doesn't expose a USB drive** — to back up anything from stock first (e.g. save files under `/Saves/`), connect via [Thonny](https://color.thumby.us/pages/getting-started-with-thonny/getting-started-with-thonny/) or `mpremote` and pull files over the REPL. Do that **before** flashing ThumbyOne.
 > - ThumbyOne uses its own filesystem layout (`/roms/`, `/carts/`, `/games/`) — stock `/Games/` Python games won't be visible until you move them into `/games/`.
 > - There is **no going back to stock with your data intact** once ThumbyOne has first-booted.
 >
