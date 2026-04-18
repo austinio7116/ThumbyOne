@@ -21,6 +21,107 @@
 
 #include "thumbyone_disk.h"
 
+/* --- write-back cache --------------------------------------------- *
+ *
+ * Flash erase granularity is 4 KB (8 sectors). Without a cache, each
+ * 512-byte host write incurs a full RMW: read 4 KB from XIP, splat
+ * in the 512 bytes, erase 4 KB, program 4 KB, verify. Small-file
+ * transfers pay this per-sector and end up dominated by flash erase
+ * time, giving ~kB/s throughput.
+ *
+ * The cache holds one 4 KB erase block. Writes that target the
+ * cached block overlay directly into the buffer; writes that target
+ * a different block flush the cache first, then load the new block.
+ * Reads that hit the cached block come from the buffer (so
+ * host-side fsync round-trips see the pending writes). A background
+ * drain fires whenever MSC has been quiet for >300 ms, committing
+ * the dirty block so host eject / unplug doesn't strand data.
+ *
+ * Mirrors the ThumbyP8 / ThumbyNES MSC pattern — both of those
+ * slots had this long before ThumbyOne's lobby did.
+ */
+#define WB_CACHE_SIZE THUMBYONE_DISK_ERASE_SIZE
+#define WB_SPB        (THUMBYONE_DISK_ERASE_SIZE / THUMBYONE_DISK_SECTOR_SIZE) /* 8 */
+
+static uint8_t  g_wb_buf[WB_CACHE_SIZE] __attribute__((aligned(4)));
+static int32_t  g_wb_block = -1;    /* -1 = empty; else flash block idx  */
+static bool     g_wb_dirty = false;
+
+/* Load the 4 KB XIP block `block` into g_wb_buf. */
+static void wb_load(uint32_t block) {
+    uint32_t sector = block * WB_SPB;
+    thumbyone_disk_read(g_wb_buf, sector, WB_SPB);
+    g_wb_block = (int32_t)block;
+    g_wb_dirty = false;
+}
+
+/* Commit g_wb_buf to flash if dirty. Clears the dirty flag; keeps
+ * the buffer loaded so a subsequent hit still resolves locally. */
+static int wb_flush(void) {
+    if (!g_wb_dirty || g_wb_block < 0) return 0;
+    uint32_t sector = (uint32_t)g_wb_block * WB_SPB;
+    int r = thumbyone_disk_write(g_wb_buf, sector, WB_SPB);
+    if (r == 0) g_wb_dirty = false;
+    return r;
+}
+
+/* Write `count` sectors from `src` starting at `sector`. Hits the
+ * cache where possible; flushes + reloads when the target block
+ * changes. */
+static int wb_write(const uint8_t *src, uint32_t sector, uint32_t count) {
+    while (count > 0) {
+        uint32_t block        = sector / WB_SPB;
+        uint32_t sec_in_blk   = sector % WB_SPB;
+        uint32_t sec_avail    = WB_SPB - sec_in_blk;
+        uint32_t sec_this     = (count < sec_avail) ? count : sec_avail;
+
+        if (g_wb_block != (int32_t)block) {
+            /* Block miss: flush any dirty buffer, then load the
+             * target block so subsequent reads to it still see
+             * pre-existing contents for the un-overwritten sectors. */
+            if (wb_flush() != 0) return -1;
+            wb_load(block);
+        }
+
+        memcpy(g_wb_buf + sec_in_blk * THUMBYONE_DISK_SECTOR_SIZE,
+               src, sec_this * THUMBYONE_DISK_SECTOR_SIZE);
+        g_wb_dirty = true;
+
+        src    += sec_this * THUMBYONE_DISK_SECTOR_SIZE;
+        sector += sec_this;
+        count  -= sec_this;
+    }
+    return 0;
+}
+
+/* Read `count` sectors into `dst` starting at `sector`. Sectors that
+ * fall within the currently-cached block come out of the buffer so
+ * the host sees its own pending writes; everything else goes to
+ * XIP. This avoids the "host read-after-write returns stale data"
+ * bug that kills FAT consistency when the OS writes the FAT then
+ * immediately reads it back. */
+static int wb_read(uint8_t *dst, uint32_t sector, uint32_t count) {
+    while (count > 0) {
+        uint32_t block        = sector / WB_SPB;
+        uint32_t sec_in_blk   = sector % WB_SPB;
+        uint32_t sec_avail    = WB_SPB - sec_in_blk;
+        uint32_t sec_this     = (count < sec_avail) ? count : sec_avail;
+
+        if (g_wb_block == (int32_t)block) {
+            memcpy(dst,
+                   g_wb_buf + sec_in_blk * THUMBYONE_DISK_SECTOR_SIZE,
+                   sec_this * THUMBYONE_DISK_SECTOR_SIZE);
+        } else {
+            if (thumbyone_disk_read(dst, sector, sec_this) != 0) return -1;
+        }
+
+        dst    += sec_this * THUMBYONE_DISK_SECTOR_SIZE;
+        sector += sec_this;
+        count  -= sec_this;
+    }
+    return 0;
+}
+
 /* --- activity tracking --------------------------------------------- */
 
 static volatile bool     g_mounted      = false;
@@ -163,10 +264,11 @@ void tud_msc_capacity_cb(uint8_t lun, uint32_t *block_count, uint16_t *block_siz
 
 bool tud_msc_start_stop_cb(uint8_t lun, uint8_t power_condition,
                             bool start, bool load_eject) {
-    (void)lun; (void)power_condition; (void)start; (void)load_eject;
-    /* We ack eject and otherwise ignore — all writes go synchronously
-     * through thumbyone_disk_write so there's no deferred cache to
-     * flush before an eject. */
+    (void)lun; (void)power_condition; (void)start;
+    /* Host eject signal: flush the write-back cache so pending
+     * sectors land in flash before the drive goes away. Happens at
+     * Windows "Safely Remove", macOS drag-to-trash, etc. */
+    if (load_eject) wb_flush();
     return true;
 }
 
@@ -178,7 +280,7 @@ int32_t tud_msc_read10_cb(uint8_t lun, uint32_t lba, uint32_t offset,
     uint32_t sector_size = thumbyone_disk_sector_size();
     if (bufsize % sector_size != 0) return -1;
     uint32_t count = bufsize / sector_size;
-    if (thumbyone_disk_read((uint8_t *)buffer, lba, count) != 0) return -1;
+    if (wb_read((uint8_t *)buffer, lba, count) != 0) return -1;
     return (int32_t)bufsize;
 }
 
@@ -195,16 +297,17 @@ int32_t tud_msc_write10_cb(uint8_t lun, uint32_t lba, uint32_t offset,
     uint32_t sector_size = thumbyone_disk_sector_size();
     if (bufsize % sector_size != 0) return -1;
     uint32_t count = bufsize / sector_size;
-    if (thumbyone_disk_write(buffer, lba, count) != 0) return -1;
+    if (wb_write(buffer, lba, count) != 0) return -1;
     return (int32_t)bufsize;
 }
 
 int32_t tud_msc_scsi_cb(uint8_t lun, uint8_t const scsi_cmd[16],
                          void *buffer, uint16_t bufsize) {
     (void)lun; (void)scsi_cmd; (void)buffer; (void)bufsize;
-    /* SYNCHRONIZE_CACHE etc.: thumbyone_disk_write is already
-     * synchronous, so no flush work needed. Return 0 to signal we
-     * handled it without stalling — tinyUSB then ACKs to the host. */
+    /* SYNCHRONIZE_CACHE (0x35) would be the natural place to flush,
+     * but flushing 4 KB takes ~70 ms with IRQs off — that stalls
+     * tud_task() past the host's MSC timeout. Return 0 here and let
+     * the main-loop drain fire when MSC goes quiet instead. */
     return 0;
 }
 
@@ -224,4 +327,12 @@ bool lobby_usb_mounted(void) {
 
 uint64_t lobby_usb_last_op_us(void) {
     return g_last_op_us;
+}
+
+bool lobby_usb_cache_dirty(void) {
+    return g_wb_dirty;
+}
+
+void lobby_usb_drain(void) {
+    wb_flush();
 }

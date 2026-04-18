@@ -41,4 +41,12 @@ bool lobby_usb_mounted(void);
  * flash an activity indicator while the host is copying data. */
 uint64_t lobby_usb_last_op_us(void);
 
+/* Write-back cache state. The lobby main loop polls both every
+ * iteration and, whenever the cache holds dirty data AND MSC has
+ * been quiet for >300 ms, calls lobby_usb_drain() to commit one
+ * block. Calling drain() when there's nothing dirty is a cheap
+ * no-op. */
+bool lobby_usb_cache_dirty(void);
+void lobby_usb_drain(void);
+
 #endif

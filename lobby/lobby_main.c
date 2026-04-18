@@ -597,8 +597,18 @@ int main(void) {
     int pending_slot = -1;   /* -1 = none */
     uint64_t pending_since_us = 0;
 
-    /* Small helper to pump USB + refresh the bottom UI row. Called
-     * from the tight button-wait loops too so we never stall USB. */
+    /* Small helper to pump USB + refresh the UI + drive the write-
+     * back cache drain. Called from the tight button-wait loops too
+     * so we never stall USB.
+     *
+     * The drain fires when MSC has been quiet for >300 ms AND the
+     * cache holds dirty data. That interval is long enough that the
+     * host's inter-command gap won't cause a spurious drain (then
+     * stall the next command), but short enough that an unplug or
+     * sudden power loss won't strand much data. Each drain commits
+     * the entire 4 KB block in one shot (~70 ms with IRQs off per
+     * erase + page programs); there's at most one dirty block in
+     * flight, so one drain fully empties the cache. */
     absolute_time_t next_row_check = make_timeout_time_ms(0);
     #define USB_PUMP() do {                                              \
         lobby_usb_task();                                                \
@@ -610,6 +620,13 @@ int main(void) {
                 draw_usb_row(st);                                        \
             }                                                            \
             next_row_check = make_timeout_time_ms(100);                  \
+        }                                                                \
+        if (lobby_usb_cache_dirty()) {                                   \
+            uint64_t last = lobby_usb_last_op_us();                      \
+            uint64_t now_us = (uint64_t)time_us_64();                    \
+            if (last == 0 || (now_us - last) > 300000) {                 \
+                lobby_usb_drain();                                       \
+            }                                                            \
         }                                                                \
     } while (0)
 
@@ -682,7 +699,13 @@ int main(void) {
             if (!still_held) {
                 /* Wait for USB to go quiet (500 ms since last op) so
                  * any in-flight host write has completed before we
-                 * hand the FAT to a slot. */
+                 * hand the FAT to a slot. ALSO flush the write-back
+                 * cache: the drain in USB_PUMP will normally have
+                 * done this already, but a race where the button
+                 * press arrives inside the 300 ms quiet window
+                 * before the drain fires would otherwise strand
+                 * dirty data. The explicit flush here is the safety
+                 * net. */
                 uint64_t last = lobby_usb_last_op_us();
                 uint64_t now  = (uint64_t)time_us_64();
                 bool quiet = (last == 0) || ((now - last) > 500000);
@@ -690,6 +713,7 @@ int main(void) {
                  * to debounce finger-bounce. */
                 bool stable = (now - pending_since_us) > 50000;
                 if (quiet && stable) {
+                    if (lobby_usb_cache_dirty()) lobby_usb_drain();
                     nes_lcd_wait_idle();
                     if (pending_slot == -2) thumbyone_handoff_request_lobby();
                     else thumbyone_handoff_request_slot(pending_slot);
