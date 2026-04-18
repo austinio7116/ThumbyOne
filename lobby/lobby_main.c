@@ -226,6 +226,19 @@ static bool confirm_erase_chord(void) {
 #define PIN_LED_B   12   /* PWM6 A */
 #define LED_PWM_WRAP 2048
 
+/* Set the LED to a normalised RGB triple (each 0..255). */
+static void led_set_rgb(int r, int g, int b) {
+    /* Invert for common-anode. Scale 0..255 → 0..2047. */
+    pwm_set_gpio_level(PIN_LED_R, (uint16_t)((255 - r) * LED_PWM_WRAP / 255));
+    pwm_set_gpio_level(PIN_LED_G, (uint16_t)((255 - g) * LED_PWM_WRAP / 255));
+    pwm_set_gpio_level(PIN_LED_B, (uint16_t)((255 - b) * LED_PWM_WRAP / 255));
+}
+
+static void led_set_off(void)    { led_set_rgb(0, 0, 0); }
+static void led_set_white(void)  { led_set_rgb(60, 60, 60); } /* default idle */
+static void led_set_green(void)  { led_set_rgb(0, 80, 0); }   /* dim — it's very bright at full */
+static void led_set_yellow(void) { led_set_rgb(90, 60, 0); }
+
 static void led_setup(void) {
     /* Slice 5 drives R + G, slice 6 drives B. */
     gpio_set_function(PIN_LED_R, GPIO_FUNC_PWM);
@@ -237,23 +250,12 @@ static void led_setup(void) {
     pwm_config_set_wrap(&cfg, LED_PWM_WRAP);
     pwm_init(slice_rg, &cfg, true);
     pwm_init(slice_b,  &cfg, true);
-    /* Start with LED off (common-anode → all channels high). */
-    pwm_set_gpio_level(PIN_LED_R, LED_PWM_WRAP);
-    pwm_set_gpio_level(PIN_LED_G, LED_PWM_WRAP);
-    pwm_set_gpio_level(PIN_LED_B, LED_PWM_WRAP);
+    /* Start with the default white — the lobby's USB state row
+     * will override this once the main loop starts, but we want
+     * the LED visibly on from first frame rather than dark for
+     * the few ms before the first state update. */
+    led_set_white();
 }
-
-/* Set the LED to a normalised RGB triple (each 0..255). */
-static void led_set_rgb(int r, int g, int b) {
-    /* Invert for common-anode. Scale 0..255 → 0..2047. */
-    pwm_set_gpio_level(PIN_LED_R, (uint16_t)((255 - r) * LED_PWM_WRAP / 255));
-    pwm_set_gpio_level(PIN_LED_G, (uint16_t)((255 - g) * LED_PWM_WRAP / 255));
-    pwm_set_gpio_level(PIN_LED_B, (uint16_t)((255 - b) * LED_PWM_WRAP / 255));
-}
-
-static void led_set_off(void)    { led_set_rgb(0, 0, 0); }
-static void led_set_green(void)  { led_set_rgb(0, 80, 0); }  /* dim — it's very bright at full */
-static void led_set_yellow(void) { led_set_rgb(90, 60, 0); }
 
 /* Top-right USB indicator. A single-character-width "USB" label
  * followed by a 5x5 filled square acting as an LED. State changes
@@ -302,7 +304,10 @@ static void draw_usb_row(usb_row_state_t st) {
     default:
         led_col = COL_USB_OFF;
         lbl_col = COL_USB_OFF;
-        led_set_off();
+        /* White matches the rest-of-system indicator default — the
+         * LED is never "off" during normal use, just not signalling
+         * USB. */
+        led_set_white();
         break;
     }
 
