@@ -83,10 +83,15 @@ The lobby is the home screen. It's a 2×2 grid of system icons: NES, PICO-8, DOO
 | **MENU** (held at boot) | Force lobby (bypass any pending slot chain) |
 | **LB + RB** (held at boot) | Wipe and reformat the shared FAT |
 
-The bottom strip shows USB state:
-- **"hold MENU at boot: force lobby recovery"** — no USB connected
-- **"USB connected — drop files on drive"** (green) — host has mounted the drive
-- **"USB transfer... do not unplug"** (yellow) — flashes while data is moving
+A small **USB** label + LED dot in the top-right corner of the lobby — and the device's physical RGB LED — both show the USB state:
+
+| On-screen dot | Physical LED | Meaning |
+|---|---|---|
+| dim grey | white | USB cable not connected (idle) |
+| green | green | Host has mounted the drive — safe to drop files |
+| yellow | yellow | Transfer in flight — **do not unplug** |
+
+The physical LED mirrors the on-screen dot so you can see at a glance whether a transfer is still happening even without looking at the screen. When a copy finishes the LED settles back to green; when you eject or unplug, it goes back to white.
 
 Slot-launch is held off while USB is active: if you're mid-copy and press A, ThumbyOne waits for the FAT to go quiet before handing off, so a half-written file never turns into a corrupt one on the slot.
 
