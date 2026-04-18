@@ -46,7 +46,7 @@ uint32_t thumbyone_disk_sector_size(void) {
 /* ATRANS snapshot helpers — the SDK's flash routines reset QMI
  * during erase/program, including the identity mappings our
  * chained slot needs for this FAT region. Save on the way in,
- * restore on the way out. */
+ * restore (plus fast-XIP config) on the way out. */
 static inline void save_atrans(uint32_t out[4]) {
     out[0] = qmi_hw->atrans[0];
     out[1] = qmi_hw->atrans[1];
@@ -59,26 +59,17 @@ static inline void restore_atrans(const uint32_t in[4]) {
     qmi_hw->atrans[1] = in[1];
     qmi_hw->atrans[2] = in[2];
     qmi_hw->atrans[3] = in[3];
-#ifdef THUMBYONE_SLOT_MODE
-    /* Chained slots run in fast QPI XIP mode (thumbyone_xip_fast_setup
-     * was called at handoff). The SDK's flash op exits XIP, does the
-     * operation, and re-enters XIP in whatever mode the chained
-     * image's boot_stage2 selects — typically single-SPI fast read,
-     * NOT QPI. Without this restore the slot's code XIP silently
-     * breaks after the first flash write.
-     *
-     * The LOBBY, on the other hand, boots at flash 0 with the stock
-     * boot_stage2 already in single-SPI fast-read mode, and the SDK
-     * flash op re-enters XIP in exactly that same mode — no extra
-     * work needed. Calling thumbyone_xip_fast_setup from the lobby
-     * would forcibly reconfigure QMI to QPI mid-transaction (we
-     * tracked a Thumbatro-launches-then-FAT-wipes bug to exactly
-     * this: the first large host write through the lobby's MSC path
-     * triggered an unneeded QMI reconfiguration that subsequent XIP
-     * reads couldn't cleanly survive). Gate the call out of the
-     * lobby build. */
+    /* Always re-establish fast QPI XIP after a flash op. This
+     * applies equally to lobby and slot builds: the slots need
+     * it because they run in QPI mode post-handoff and the SDK
+     * flash op resets QMI to single-SPI, and the lobby needs it
+     * because its SUBSEQUENT flash ops (and ultimately the slot
+     * chain-image handoff) depend on flash being in a consistent
+     * fast-XIP state throughout. Gating this call out of the lobby
+     * build caused DOOM to drop back to single-SPI performance
+     * after the lobby's first flash write and MPY slot games to
+     * fail to launch. */
     thumbyone_xip_fast_setup();
-#endif
 }
 
 

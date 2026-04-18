@@ -395,39 +395,14 @@ static void grid_tile_origin(int idx, int *ox, int *oy) {
     *oy = GRID_ORIGIN_Y + row * (GRID_TILE_SIZE + GRID_GUTTER);
 }
 
-static void draw_tile_border(int x, int y, uint16_t c) {
-    /* 2 px border outside the 48x48 tile so the tile isn't
-     * overdrawn. */
-    for (int i = -2; i < GRID_TILE_SIZE + 2; ++i) {
-        int xx = x + i;
-        if ((unsigned)xx >= 128) continue;
-        if (y - 2 >= 0 && y - 2 < 128) g_fb[(y - 2) * 128 + xx] = c;
-        if (y - 1 >= 0 && y - 1 < 128) g_fb[(y - 1) * 128 + xx] = c;
-        int by0 = y + GRID_TILE_SIZE;
-        int by1 = y + GRID_TILE_SIZE + 1;
-        if ((unsigned)by0 < 128) g_fb[by0 * 128 + xx] = c;
-        if ((unsigned)by1 < 128) g_fb[by1 * 128 + xx] = c;
-    }
-    for (int j = -2; j < GRID_TILE_SIZE + 2; ++j) {
-        int yy = y + j;
-        if ((unsigned)yy >= 128) continue;
-        if (x - 2 >= 0 && x - 2 < 128) g_fb[yy * 128 + (x - 2)] = c;
-        if (x - 1 >= 0 && x - 1 < 128) g_fb[yy * 128 + (x - 1)] = c;
-        int bx0 = x + GRID_TILE_SIZE;
-        int bx1 = x + GRID_TILE_SIZE + 1;
-        if ((unsigned)bx0 < 128) g_fb[yy * 128 + bx0] = c;
-        if ((unsigned)bx1 < 128) g_fb[yy * 128 + bx1] = c;
-    }
-}
-
-#define COL_SEL      0xFFE0    /* yellow selection border       */
-#define COL_SEL_OFF  0x8410    /* grey border for disabled tile */
-
-/* Darken the 48x48 region at (x, y) in place — per-channel shift
- * to approximately 1/4 brightness. Applied to tiles whose slot
- * isn't compiled into this build so they read as "present but
- * unavailable" rather than missing entirely. */
-static void dim_tile(int x, int y) {
+/* Darken the 48x48 region at (x, y) in place by `shift` bits per
+ * channel:
+ *    shift=1 → 1/2 brightness (non-selected tiles dim back)
+ *    shift=2 → 1/4 brightness (disabled slots — "present but
+ *              unavailable" read, almost fully greyed)
+ * The per-channel right-shift keeps hue stable — the icon still
+ * reads as itself, just quieter. */
+static void dim_tile(int x, int y, int shift) {
     for (int j = 0; j < GRID_TILE_SIZE; ++j) {
         int yy = y + j;
         if ((unsigned)yy >= 128) continue;
@@ -438,40 +413,78 @@ static void dim_tile(int x, int y) {
             uint32_t r = (p >> 11) & 0x1F;
             uint32_t g = (p >>  5) & 0x3F;
             uint32_t b = (p      ) & 0x1F;
-            r >>= 2; g >>= 2; b >>= 2;
+            r >>= shift; g >>= shift; b >>= shift;
             g_fb[yy * 128 + xx] = (uint16_t)((r << 11) | (g << 5) | b);
         }
     }
 }
 
+/* System labels — shown at the bottom of the screen under the
+ * selected tile. Order matches the grid layout + lobby_icons[] /
+ * g_grid_slot_order[]. */
+static const char *const g_grid_labels[4] = {
+    "NES / SMS / GG / GB",
+    "PICO-8",
+    "DOOM",
+    "MICROPYTHON",
+};
+
 static void render_home(void) {
     for (int i = 0; i < 128 * 128; ++i) g_fb[i] = COL_BG;
 
-    /* Slim title strip — keeps vertical room for the grid + USB row. */
+    /* Slim title strip — keeps vertical room for the grid + label. */
     int w = nes_font_width("ThumbyOne");
-    nes_font_draw(g_fb, "ThumbyOne", (128 - w) / 2, 2, COL_TITLE);
+    nes_font_draw(g_fb, "ThumbyOne", 2, 2, COL_TITLE);
+    (void)w;
 
-    /* Grid tiles. The table is indexed in visual left-to-right,
-     * top-to-bottom order to make the D-pad math straight-forward.
-     * Disabled tiles are drawn normally then darkened in place —
-     * the user still sees what's NOT in this build. */
+    /* Grid tiles. Each tile is drawn at full brightness first, then
+     * dimmed in place as appropriate:
+     *   - slot not present in this build → 1/4 brightness
+     *   - slot present but not under the cursor → 1/2 brightness
+     *   - cursor tile → full brightness (no dim applied)
+     * Selection is conveyed by brightness alone — no border box. */
     for (int i = 0; i < 4 && i < (int)lobby_icons_count; ++i) {
         int ox, oy;
         grid_tile_origin(i, &ox, &oy);
         lobby_icon_draw(g_fb, &lobby_icons[i], ox, oy);
         if (!g_grid_slot_present[i]) {
-            dim_tile(ox, oy);
-        }
-        if (i == g_grid_cursor) {
-            uint16_t c = g_grid_slot_present[i] ? COL_SEL : COL_SEL_OFF;
-            draw_tile_border(ox, oy, c);
+            dim_tile(ox, oy, 2);        /* hard dim — disabled */
+        } else if (i != g_grid_cursor) {
+            dim_tile(ox, oy, 1);        /* gentle dim — not selected */
         }
     }
 
-    /* The bottom strip gets managed by draw_usb_row so initial state
-     * shows the "hold MENU at boot" hint until a host mounts. */
-    g_usb_row_state = USB_ROW_NONE;
-    draw_usb_row(g_usb_row_state);
+    /* System label under the grid. Centred, bright white to echo the
+     * "activated" feel of the undimmed selected tile. */
+    {
+        const char *label = g_grid_labels[g_grid_cursor];
+        uint16_t col = g_grid_slot_present[g_grid_cursor]
+                         ? COL_TEXT : COL_USB_OFF;   /* dim grey for disabled */
+        int lw = nes_font_width(label);
+        nes_font_draw(g_fb, label, (128 - lw) / 2, 119, col);
+    }
+
+    /* Paint the USB indicator into the top-right strip using the
+     * current state. This does NOT re-sample or re-drive the LED —
+     * those are owned by the main loop's USB state machine, which
+     * only updates on a real state change. */
+    {
+        usb_row_state_t st = g_usb_row_state;
+        for (int y = 0; y < 11; ++y)
+            for (int x = 100; x < 128; ++x)
+                g_fb[y * 128 + x] = COL_BG;
+        uint16_t indicator =
+            st == USB_ROW_ACTIVE ? COL_USB_BUSY :
+            st == USB_ROW_READY  ? COL_USB_ON   :
+                                   COL_USB_OFF;
+        nes_font_draw(g_fb, "USB", USB_LABEL_X, 2, indicator);
+        for (int j = 0; j < USB_LED_S; ++j)
+            for (int i = 0; i < USB_LED_S; ++i)
+                g_fb[(USB_LED_Y + j) * 128 + (USB_LED_X + i)] = indicator;
+    }
+
+    nes_lcd_present(g_fb);
+    nes_lcd_wait_idle();
 }
 
 static void redraw_home_if_cursor_moved(int prev_cursor) {
