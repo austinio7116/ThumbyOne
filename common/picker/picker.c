@@ -60,18 +60,26 @@
 #define PIN_B          25
 #define PIN_MENU       26
 
-/* --- palette ----------------------------------------------------- */
-#define COL_BG      0x0000
-#define COL_PANEL   0x10A2   /* dark blue-grey for info/menu panels */
-#define COL_PANEL_HL 0x20C5  /* slightly lighter highlight row      */
-#define COL_TITLE   0x07FF   /* cyan for the "MPY" banner           */
-#define COL_FG      0xFFFF   /* pure white for game title           */
-#define COL_TEXT    0xDEFB   /* dim off-white for body              */
-#define COL_DIM     0x8410   /* grey for footers / hints            */
-#define COL_ACCENT  0xFFE0   /* yellow for position counter + fav   */
-#define COL_GOOD    0x07E0   /* green for charging / OK             */
-#define COL_WARN    0xFC00   /* orange — MENU hold hint             */
-#define COL_ERR     0xF800   /* red — FS error screen               */
+/* --- palette ----------------------------------------------------- *
+ * Menu-overlay colours deliberately mirror ThumbyNES's nes_menu.c so
+ * both slots feel identical from inside the overlay: orange title
+ * bar, green cursor row, green progress-bar fill.
+ */
+#define COL_BG       0x0000
+#define COL_PANEL    0x10A2   /* dark blue-grey for hero card    */
+#define COL_PANEL_HL 0x20C5   /* hero-view highlight row         */
+#define COL_HEAD     0x07FF   /* cyan for the "MPY" hero banner  */
+#define COL_FG       0xFFFF   /* pure white for game title       */
+#define COL_TEXT     0xDEFB   /* dim off-white for body          */
+#define COL_DIM      0x8410   /* grey for footers / hints        */
+#define COL_DARK     0x4208   /* very dim grey                   */
+#define COL_ACCENT   0xFFE0   /* yellow: pos counter + favourite */
+#define COL_HIGHLT   0x07E0   /* green: cursor row + progress    */
+#define COL_TITLE    0xFD20   /* orange: menu title bar          */
+#define COL_HL_BG    0x0220   /* dim-green cursor row background */
+#define COL_BAR_BG   0x39E7   /* progress-bar track background   */
+#define COL_WARN     0xFC00   /* orange — MENU hold hint         */
+#define COL_ERR      0xF800   /* red — FS error screen           */
 
 /* --- buffers ----------------------------------------------------- */
 static uint16_t g_fb[128 * 128] __attribute__((aligned(4)));
@@ -126,18 +134,42 @@ static const char * const sort_label[SORT_COUNT] = {
 #define FAVS_PATH "/.favs"
 static bool g_favs_dirty = false;
 
-/* --- menu state -------------------------------------------------- */
+/* --- menu state -------------------------------------------------- *
+ * The overlay is modelled on ThumbyNES's generic menu (nes_menu.c):
+ * a darkened copy of the hero view as the backdrop, orange title
+ * bar, green cursor row, INFO rows with progress bars, interactive
+ * rows underneath. Favourite-toggle is NOT a menu item — it's bound
+ * directly to B in the hero view, which feels far more immediate
+ * than drilling into a menu to flip a flag. */
 typedef enum {
-    MI_FAVOURITE = 0,
+    /* INFO rows (not selectable — cursor skips them). */
+    MI_BATT = 0,
+    MI_DISK,
+    MI_BY,
+    MI_FW,
+    /* Selectable rows. */
     MI_SORT,
     MI_LOBBY,
     MI_CLOSE,
     MI_COUNT,
 } menu_item_t;
 
+/* Is this row picker-cursor-selectable? */
+static bool menu_item_selectable(menu_item_t it) {
+    switch (it) {
+    case MI_SORT: case MI_LOBBY: case MI_CLOSE: return true;
+    default: return false;
+    }
+}
+
 static bool g_menu_open = false;
-static int  g_menu_cursor = 0;
+static int  g_menu_cursor = MI_SORT;   /* first selectable row */
 static bool g_menu_lobby_requested = false;
+/* Scratch copy of the hero frame used as the darkened backdrop
+ * behind the menu panel. Filled once on menu-open so each subsequent
+ * redraw can restore from a clean dimmed frame without re-rendering
+ * the hero view (which would also repaint over the panel). */
+static uint16_t g_menu_backdrop[128 * 128] __attribute__((aligned(4)));
 
 /* --- button helpers --------------------------------------------- */
 static bool btn(uint pin) { return !gpio_get(pin); }
@@ -182,10 +214,18 @@ static float battery_half_voltage(void) {
     battery_init();
     adc_select_input(BATT_ADC_CH);
     /* Discard the first sample after a channel switch — RP2350 ADC
-     * returns the previous channel's in-flight reading. */
+     * returns the previous channel's in-flight reading. Then take
+     * the average of several more samples so the displayed value
+     * doesn't jitter the last bar pixel every menu tick. Drawing
+     * the bar from a single raw reading makes the length flicker
+     * visibly at the edge. 8 reads at ~96 cycles each is well
+     * under 1 ms, cheap. */
     (void)adc_read();
-    uint16_t raw = adc_read();
-    return (float)raw * ADC_REF_V / (float)ADC_MAX_CNT;
+    const int N = 8;
+    uint32_t sum = 0;
+    for (int i = 0; i < N; i++) sum += adc_read();
+    float raw = (float)sum / (float)N;
+    return raw * ADC_REF_V / (float)ADC_MAX_CNT;
 }
 
 static float battery_voltage(void)  { return 2.0f * battery_half_voltage(); }
@@ -650,7 +690,7 @@ static void render_icon_placeholder(int x, int y, int side, char init) {
 static void render_empty(void) {
     fb_fill(COL_BG);
     int w = nes_font_width_2x("MPY");
-    nes_font_draw_2x(g_fb, "MPY", (128 - w) / 2, 10, COL_TITLE);
+    nes_font_draw_2x(g_fb, "MPY", (128 - w) / 2, 10, COL_HEAD);
     for (int x = 4; x < 124; ++x) g_fb[30 * 128 + x] = COL_DIM;
 
     nes_font_draw(g_fb, "no games found",    14, 48, COL_FG);
@@ -678,7 +718,7 @@ static void render_hero(int sel) {
     fb_fill(COL_BG);
 
     /* Top strip: "MPY" banner left, pos + favourite-star right. */
-    nes_font_draw(g_fb, "MPY", 4, 4, COL_TITLE);
+    nes_font_draw(g_fb, "MPY", 4, 4, COL_HEAD);
 
     int real = (g_game_count > 0) ? g_order[sel] : -1;
 
@@ -756,7 +796,7 @@ static void render_hero(int sel) {
                   draw_body_line, NULL);
     }
 
-    nes_font_draw(g_fb, "A launch  MENU menu", 6, 121, COL_DIM);
+    nes_font_draw(g_fb, "A play B fav MENU", 6, 121, COL_DIM);
 
     present_blocking();
 }
@@ -809,141 +849,231 @@ static void fmt_kb(char *out, size_t cap, uint32_t kb) {
     }
 }
 
-static void draw_info_row(const char *label, const char *value,
-                          int y, uint16_t val_col) {
-    nes_font_draw(g_fb, label, 4, y, COL_DIM);
-    int vw = nes_font_width(value);
-    nes_font_draw(g_fb, value, 124 - vw, y, val_col);
+/* In-place darken the framebuffer to ~1/4 brightness, per-channel.
+ * Copy of ThumbyNES nes_menu.c's darken_fb — kept verbatim so the
+ * overlay backdrop intensity matches byte-for-byte. */
+static void darken_fb(uint16_t *fb) {
+    for (int i = 0; i < 128 * 128; i++) {
+        uint16_t p = fb[i];
+        uint32_t r = (p >> 11) & 0x1F;
+        uint32_t g = (p >>  5) & 0x3F;
+        uint32_t b = (p      ) & 0x1F;
+        r >>= 2; g >>= 2; b >>= 2;
+        fb[i] = (uint16_t)((r << 11) | (g << 5) | b);
+    }
+}
+
+/* Thin fill bar — no outline. Used as the INFO-row progress strip
+ * (same shape/size as ThumbyNES). */
+static void draw_thin_bar(int x, int y, int w, int h,
+                          int value, int vmin, int vmax,
+                          uint16_t fg, uint16_t bg) {
+    fb_rect(x, y, w, h, bg);
+    int span = vmax - vmin;
+    if (span <= 0) return;
+    int v = value - vmin;
+    if (v < 0) v = 0;
+    if (v > span) v = span;
+    int fill_w = (w * v) / span;
+    if (fill_w > 0) fb_rect(x, y, fill_w, h, fg);
+}
+
+/* NES-style menu layout constants. */
+#define M_TITLE_H      11
+#define M_FOOTER_H      8
+#define M_ROW_H        10
+#define M_ITEMS_TOP    (M_TITLE_H + 8 /* subtitle */ + 1)
+
+/* Build one row's value-column text and optional bar parameters.
+ * `val_out` must hold >= 24 chars. `bar_value` etc. are set to
+ * control a progress-bar strip; set `bar_max=0` to skip the bar. */
+typedef struct {
+    char      val[24];
+    uint16_t  val_col;
+    int       bar_value;
+    int       bar_min;
+    int       bar_max;
+} menu_row_render_t;
+
+static void menu_build_batt_row(menu_row_render_t *r) {
+    int pct = battery_percent();
+    float v = battery_voltage();
+    bool chg = battery_charging();
+    int vmv = (int)(v * 100.0f + 0.5f);
+    int vwhole = vmv / 100;
+    int vhund  = vmv % 100;
+    size_t k = 0;
+    if (chg) {
+        memcpy(r->val, "CHRG ", 5); k = 5;
+    } else {
+        char pbuf[6]; int_to_str(pct, pbuf);
+        size_t pl = strlen(pbuf);
+        memcpy(r->val, pbuf, pl); k = pl;
+        r->val[k++] = '%'; r->val[k++] = ' ';
+    }
+    char vbuf[10]; int_to_str(vwhole, vbuf);
+    size_t vl = strlen(vbuf);
+    vbuf[vl++] = '.';
+    if (vhund < 10) vbuf[vl++] = '0';
+    int_to_str(vhund, vbuf + vl); vl = strlen(vbuf);
+    vbuf[vl++] = 'V'; vbuf[vl] = 0;
+    size_t vbl = strlen(vbuf);
+    if (k + vbl >= sizeof(r->val)) vbl = sizeof(r->val) - 1 - k;
+    memcpy(r->val + k, vbuf, vbl); r->val[k + vbl] = 0;
+    r->val_col   = chg ? COL_HIGHLT : (pct < 15 ? COL_ERR : COL_TEXT);
+    r->bar_value = pct;
+    r->bar_min   = 0;
+    r->bar_max   = 100;
+}
+
+static void menu_build_disk_row(menu_row_render_t *r) {
+    uint32_t fk = 0, tk = 0;
+    disk_stats_kb(&fk, &tk);
+    char fv[10], tv[10];
+    fmt_kb(fv, sizeof(fv), fk);
+    fmt_kb(tv, sizeof(tv), tk);
+    size_t n = strlen(fv);
+    if (n + 1 + strlen(tv) >= sizeof(r->val)) n = 0;
+    memcpy(r->val, fv, n);
+    r->val[n++] = '/';
+    size_t tl = strlen(tv);
+    if (n + tl >= sizeof(r->val)) tl = sizeof(r->val) - n - 1;
+    memcpy(r->val + n, tv, tl); r->val[n + tl] = 0;
+    r->val_col   = COL_TEXT;
+    /* Bar shows free fraction (fuller bar = more free space). */
+    r->bar_value = (int)fk;
+    r->bar_min   = 0;
+    r->bar_max   = (tk > 0) ? (int)tk : 1;
+}
+
+static void menu_build_by_row(menu_row_render_t *r) {
+    const char *author = g_author ? g_author : "-";
+    strncpy(r->val, author, sizeof(r->val) - 1);
+    r->val[sizeof(r->val) - 1] = 0;
+    /* Value column must fit in ~64 px (128 - 10 label - 54 margin). */
+    while (nes_font_width(r->val) > 84 && strlen(r->val) > 1) {
+        r->val[strlen(r->val) - 1] = 0;
+    }
+    r->val_col = COL_TEXT;
+    r->bar_max = 0;
+}
+
+static void menu_build_fw_row(menu_row_render_t *r) {
+    strncpy(r->val, "MPY " THUMBYONE_FW_VERSION, sizeof(r->val) - 1);
+    r->val[sizeof(r->val) - 1] = 0;
+    r->val_col = COL_TEXT;
+    r->bar_max = 0;
+}
+
+static const char *menu_label(menu_item_t it) {
+    switch (it) {
+    case MI_BATT:  return "batt";
+    case MI_DISK:  return "disk";
+    case MI_BY:    return "by";
+    case MI_FW:    return "fw";
+    case MI_SORT:  return "sort";
+    case MI_LOBBY: return "back to lobby";
+    case MI_CLOSE: return "close";
+    case MI_COUNT: return "";
+    }
+    return "";
 }
 
 static void render_menu(int sel) {
-    /* Start from the hero view so the menu overlays the selected
-     * game's context. */
-    render_hero(sel);
+    /* Restore backdrop (darkened hero view, captured on menu-open). */
+    memcpy(g_fb, g_menu_backdrop, sizeof(g_fb));
 
-    /* Dim the underlying frame with a dark blue panel covering the
-     * bulk of the screen — leaves the top-right "N/M" counter and
-     * the bottom hint strip visible so the user still has context. */
-    fb_rect(4, 16, 120, 100, COL_PANEL);
+    /* Title bar — black strip with orange underline. */
+    fb_rect(0, 0, 128, M_TITLE_H, COL_BG);
+    fb_rect(0, M_TITLE_H - 1, 128, 1, COL_TITLE);
+    nes_font_draw(g_fb, "MENU", 2, 2, COL_TITLE);
 
-    /* Title. */
-    int tw = nes_font_width_2x("MENU");
-    nes_font_draw_2x(g_fb, "MENU", (128 - tw) / 2, 18, COL_FG);
-    fb_hline(8, 32, 112, COL_DIM);
-
-    /* Info rows — battery / disk / firmware. */
-    int y = 36;
-    {
-        int pct = battery_percent();
-        float v = battery_voltage();
-        bool chg = battery_charging();
-        char val[16];
-        /* e.g. "88% 4.01V" or "CHRG 4.01V". */
-        int vmv = (int)(v * 100.0f + 0.5f);
-        int vwhole = vmv / 100;
-        int vhundredths = vmv % 100;
-        char vbuf[10];
-        char pbuf[6];
-        int_to_str(vwhole, vbuf);
-        size_t vl = strlen(vbuf);
-        vbuf[vl++] = '.';
-        if (vhundredths < 10) vbuf[vl++] = '0';
-        int_to_str(vhundredths, vbuf + vl);
-        vl = strlen(vbuf);
-        vbuf[vl++] = 'V';
-        vbuf[vl] = '\0';
-
-        size_t k = 0;
-        if (chg) {
-            memcpy(val, "CHRG ", 5); k = 5;
-        } else {
-            int_to_str(pct, pbuf);
-            size_t pl = strlen(pbuf);
-            memcpy(val, pbuf, pl); k = pl;
-            val[k++] = '%'; val[k++] = ' ';
-        }
-        size_t vbl = strlen(vbuf);
-        if (k + vbl + 1 > sizeof(val)) vbl = sizeof(val) - k - 1;
-        memcpy(val + k, vbuf, vbl);
-        val[k + vbl] = '\0';
-        uint16_t col = chg ? COL_GOOD : (pct < 15 ? COL_ERR : COL_TEXT);
-        draw_info_row("batt", val, y, col);
-    }
-    y += 9;
-    {
-        uint32_t fk = 0, tk = 0;
-        disk_stats_kb(&fk, &tk);
-        char fv[10], tv[10];
-        fmt_kb(fv, sizeof(fv), fk);
-        fmt_kb(tv, sizeof(tv), tk);
-        char row[24];
-        size_t n = strlen(fv);
-        if (n + 1 + strlen(tv) + 1 > sizeof(row)) n = 0;
-        memcpy(row, fv, n);
-        row[n++] = '/';
-        size_t tl = strlen(tv);
-        if (n + tl >= sizeof(row)) tl = sizeof(row) - n - 1;
-        memcpy(row + n, tv, tl);
-        row[n + tl] = '\0';
-        draw_info_row("free", row, y, COL_TEXT);
-    }
-    y += 9;
-    {
-        const char *author = g_author ? g_author : "-";
-        /* Truncate if the author string doesn't fit. */
-        char tmp[24];
-        strncpy(tmp, author, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
-        while (nes_font_width(tmp) > 88 && strlen(tmp) > 1) {
-            tmp[strlen(tmp) - 1] = '\0';
-        }
-        draw_info_row("by", tmp, y, COL_TEXT);
-    }
-    y += 9;
-    {
-        draw_info_row("fw", "MPY " THUMBYONE_FW_VERSION, y, COL_TEXT);
-    }
-    y += 11;   /* extra gap before the interactive items */
-
-    fb_hline(8, y, 112, COL_DIM);
-    y += 4;
-
-    /* Interactive items. */
-    int item_y[MI_COUNT];
-    const char *labels[MI_COUNT] = {
-        "Favourite",
-        "Sort",
-        "Back to lobby",
-        "Close",
-    };
+    /* Subtitle — current game name in dim grey. */
     int real = g_order[sel];
-    const char *values[MI_COUNT] = {
-        g_games[real].favourite ? "*" : "-",
-        sort_label[g_sort],
-        "",
-        "",
-    };
-
-    for (int i = 0; i < MI_COUNT; ++i) {
-        item_y[i] = y;
-        if (i == g_menu_cursor) {
-            fb_rect(6, y - 1, 116, 9, COL_PANEL_HL);
+    char subtitle[24];
+    strncpy(subtitle, g_games[real].name, sizeof(subtitle) - 1);
+    subtitle[sizeof(subtitle) - 1] = 0;
+    if (nes_font_width(subtitle) > 124) {
+        while (nes_font_width(subtitle) > 124 && strlen(subtitle) > 1) {
+            subtitle[strlen(subtitle) - 1] = 0;
         }
-        uint16_t lbl_col = (i == g_menu_cursor) ? COL_FG : COL_TEXT;
-        uint16_t val_col = (i == g_menu_cursor) ? COL_ACCENT : COL_TEXT;
-        nes_font_draw(g_fb, labels[i], 10, y, lbl_col);
-        if (values[i][0]) {
-            int vw = nes_font_width(values[i]);
-            nes_font_draw(g_fb, values[i], 120 - vw, y, val_col);
-        }
-        y += 9;
     }
-    (void)item_y;
+    nes_font_draw(g_fb, subtitle, 2, M_TITLE_H, COL_DIM);
 
-    /* Footer hint. */
-    nes_font_draw(g_fb, "A: select  MENU: close", 4, 121, COL_DIM);
+    /* Items */
+    for (int i = 0; i < MI_COUNT; ++i) {
+        int y = M_ITEMS_TOP + i * M_ROW_H;
+        bool is_cursor = (i == g_menu_cursor);
+        if (is_cursor) {
+            fb_rect(0, y - 1, 128, M_ROW_H, COL_HL_BG);
+        }
+        uint16_t fg = is_cursor ? COL_HIGHLT : COL_FG;
+        if (is_cursor) nes_font_draw(g_fb, ">", 1, y + 1, fg);
+        nes_font_draw(g_fb, menu_label((menu_item_t)i), 7, y + 1, fg);
+
+        menu_row_render_t row = { .val = {0}, .val_col = fg, .bar_max = 0 };
+        switch ((menu_item_t)i) {
+        case MI_BATT:  menu_build_batt_row(&row); break;
+        case MI_DISK:  menu_build_disk_row(&row); break;
+        case MI_BY:    menu_build_by_row  (&row); break;
+        case MI_FW:    menu_build_fw_row  (&row); break;
+        case MI_SORT:
+            strncpy(row.val, sort_label[g_sort], sizeof(row.val) - 1);
+            row.val[sizeof(row.val) - 1] = 0;
+            row.val_col = fg;
+            break;
+        case MI_LOBBY:
+        case MI_CLOSE:
+        case MI_COUNT:
+            break;
+        }
+
+        /* Value text aligned to the right of the row. Cursor row
+         * highlights the value in green too so the whole row pops. */
+        if (row.val[0]) {
+            int vw = nes_font_width(row.val);
+            uint16_t vc = is_cursor ? COL_HIGHLT : row.val_col;
+            nes_font_draw(g_fb, row.val, 128 - vw - 2, y + 1, vc);
+        }
+
+        /* Thin progress strip along the bottom of INFO rows with
+         * a meaningful range. Skips author / firmware / CHOICE /
+         * ACTION rows (bar_max == 0). */
+        if (row.bar_max > 0) {
+            int bar_x = 8;
+            int bar_y = y + M_ROW_H - 3;
+            int bar_w = 128 - 16;
+            draw_thin_bar(bar_x, bar_y, bar_w, 2,
+                          row.bar_value, row.bar_min, row.bar_max,
+                          COL_HIGHLT, COL_BAR_BG);
+        }
+    }
+
+    /* Footer — orange underline + hint for the current cursor row. */
+    fb_rect(0, 128 - M_FOOTER_H, 128, M_FOOTER_H, COL_BG);
+    fb_rect(0, 128 - M_FOOTER_H, 128, 1, COL_TITLE);
+    const char *hint;
+    switch ((menu_item_t)g_menu_cursor) {
+    case MI_SORT:  hint = "<> sort  A cycle"; break;
+    case MI_LOBBY: hint = "A return to lobby"; break;
+    case MI_CLOSE: hint = "A close";           break;
+    default:       hint = "A select  B close"; break;
+    }
+    int hw = nes_font_width(hint);
+    nes_font_draw(g_fb, hint, (128 - hw) / 2,
+                   128 - M_FOOTER_H + 1, COL_DIM);
 
     present_blocking();
+}
+
+/* Advance cursor in dir +1 or -1, skipping non-selectable rows. */
+static void menu_cursor_seek(int dir) {
+    int start = g_menu_cursor;
+    for (int tries = 0; tries < MI_COUNT; ++tries) {
+        g_menu_cursor = (g_menu_cursor + dir + MI_COUNT) % MI_COUNT;
+        if (menu_item_selectable((menu_item_t)g_menu_cursor)) return;
+    }
+    g_menu_cursor = start;
 }
 
 static void toggle_favourite(int sel) {
@@ -1029,7 +1159,7 @@ int thumbyone_picker_run(void) {
 
     bool prev_up = false, prev_down = false;
     bool prev_left = false, prev_right = false;
-    bool prev_a = false, prev_menu = false;
+    bool prev_a = false, prev_b = false, prev_menu = false;
 
     while (1) {
         bool dirty = false;
@@ -1038,20 +1168,16 @@ int thumbyone_picker_run(void) {
             /* --- menu input --- */
             if (just_pressed(PIN_UP, &prev_up) ||
                 just_pressed(PIN_LEFT, &prev_left)) {
-                g_menu_cursor = (g_menu_cursor + MI_COUNT - 1) % MI_COUNT;
+                menu_cursor_seek(-1);
                 dirty = true;
             }
             if (just_pressed(PIN_DOWN, &prev_down) ||
                 just_pressed(PIN_RIGHT, &prev_right)) {
-                g_menu_cursor = (g_menu_cursor + 1) % MI_COUNT;
+                menu_cursor_seek(+1);
                 dirty = true;
             }
             if (just_pressed(PIN_A, &prev_a)) {
                 switch ((menu_item_t)g_menu_cursor) {
-                case MI_FAVOURITE:
-                    toggle_favourite(sel);
-                    dirty = true;
-                    break;
                 case MI_SORT: {
                     int real = g_order[sel];
                     cycle_sort();
@@ -1068,10 +1194,12 @@ int thumbyone_picker_run(void) {
                     load_selection_assets(sel);
                     render_hero(sel);
                     break;
-                case MI_COUNT: break;
+                default: break;   /* INFO rows: A is a no-op */
                 }
             }
-            if (just_pressed(PIN_MENU, &prev_menu)) {
+            /* B or MENU dismiss the overlay (NES menu convention). */
+            if (just_pressed(PIN_B, &prev_b) ||
+                just_pressed(PIN_MENU, &prev_menu)) {
                 g_menu_open = false;
                 load_selection_assets(sel);
                 render_hero(sel);
@@ -1100,6 +1228,14 @@ int thumbyone_picker_run(void) {
                 dirty = true;
             }
 
+            /* B toggles favourite for the current game — immediate,
+             * no drilling into the menu. The hero view updates the
+             * star + title colour on the next redraw. */
+            if (just_pressed(PIN_B, &prev_b)) {
+                toggle_favourite(sel);
+                dirty = true;
+            }
+
             if (just_pressed(PIN_A, &prev_a)) {
                 int real = g_order[sel];
                 const char *chosen = g_games[real].path;
@@ -1118,8 +1254,12 @@ int thumbyone_picker_run(void) {
             }
 
             if (just_pressed(PIN_MENU, &prev_menu)) {
+                /* Capture + darken the current hero frame as the
+                 * menu backdrop. Cheap — one pass over 32 KB. */
+                memcpy(g_menu_backdrop, g_fb, sizeof(g_fb));
+                darken_fb(g_menu_backdrop);
                 g_menu_open = true;
-                g_menu_cursor = 0;
+                g_menu_cursor = MI_SORT;
                 render_menu(sel);
             }
 
