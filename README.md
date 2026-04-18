@@ -13,7 +13,7 @@ ThumbyOne is a unified multi-boot firmware for the [TinyCircuits Thumby Color](h
   <img src="docs/screenshots/doom-gameplay.jpg" width="240" alt="Doom on Thumby Color">
 </p>
 
-No per-system re-flashing. No "which firmware is this device running?" No re-formatting to share files. Pick a system from the lobby, it boots; hold MENU to come back.
+No per-system re-flashing. No "which firmware is this device running?" No re-formatting to share files. Pick a system from the lobby, it boots; every slot has a clear way back.
 
 ---
 
@@ -128,8 +128,16 @@ The lobby is the home screen. It's a 2×2 grid of system icons: NES, PICO-8, DOO
 | **A** | Launch the selected system |
 | **MENU** | Open the lobby overlay (battery, disk, USB, firmware, reboot) |
 | **MENU** (held at boot) | Force lobby (bypass any pending slot chain) |
-| **MENU** (held in-game) | Return to lobby — works in NES, P8, and MPY slots |
 | **LB + RB** (held at boot) | Wipe and reformat the shared FAT |
+
+**Getting back to the lobby** depends on which slot you're in — each system has a native pause / picker menu with a **Back to lobby** item:
+
+| Slot | Return gesture |
+|---|---|
+| ThumbyNES (NES / SMS / GG / GB) | **MENU** (hold ~0.5 s in-game) → pause menu → **Back to lobby** |
+| ThumbyP8 (PICO-8) | **MENU** (hold ~0.5 s in-game) → PICO-8 pause menu → **Back to lobby** |
+| ThumbyDOOM | In-game Main Menu → **Quit Game** (no confirm dialog in slot mode) |
+| MicroPython + Engine | **MENU** held ~5 s in-game — direct reboot to lobby (deliberate long hold because it drops the Python state) |
 
 A small **USB** label + LED dot in the top-right corner of the lobby — and the device's physical RGB LED — both show the USB state:
 
@@ -222,7 +230,8 @@ A four-in-one retro emulator running Nofrendo for NES, smsplus for Master System
 | D-pad | Navigate picker / drive in-game |
 | LB / RB | Switch tabs (picker) / shoulder buttons (in-game) |
 | A / B | Launch / in-game A & B |
-| MENU | Open in-game pause menu or picker menu |
+| MENU (tap) | Open picker menu |
+| MENU (held ~0.5 s, in-game) | Open the in-game pause menu (contains **Back to lobby**, save-state, palette, fast-forward, etc.) |
 | Hold B (on picker) | Toggle favourite for the highlighted ROM |
 
 ### ThumbyP8 — PICO-8
@@ -261,7 +270,8 @@ A full PICO-8 fantasy console with 4-channel audio, the native 128×128 display,
 | D-pad | D-pad |
 | A | X / confirm |
 | B | O / cancel |
-| MENU (held) | Open P8 pause menu (or picker menu in the picker) |
+| MENU (tap, in picker) | Open the picker menu (sort, favourites, back to lobby) |
+| MENU (held ~0.5 s, in-game) | Open PICO-8 pause menu (save state, back to lobby, cart `menuitem()` entries) |
 
 ### ThumbyDOOM — shareware DOOM
 
@@ -278,14 +288,27 @@ The real deal. Music, sound effects, save games, screen melts, all on a 128×128
 **Features:**
 
 - Full shareware DOOM I (E1M1 – E1M9)
-- 4-channel PWM audio with MIDI-driven music
-- Save / load
-- Configurable controls
+- 12-bit PWM DAC audio with dithering — OPL2 music (via [emu8950](https://github.com/digital-sound-antiques/emu8950)) + 8-channel ADPCM SFX mixed on core1
+- Save / load to flash (6 save slots)
+- Overlay menu (hold **LB + RB** for 3 s) with brightness, gamma, volume, controls scheme, and cheats (god / all-weapons / no-clip / level warp)
+- Persistent settings (slot 7) survive power cycles
 
 **ThumbyOne differences:**
 
 - WAD is in the firmware itself (2.5 MB), so DOOM never touches the shared FAT — it plays just fine even on a freshly-wiped device.
-- The ThumbyOne build is the same as standalone; just entered from the lobby instead of directly.
+- The in-game **Quit Game** menu item returns to the lobby directly — the vanilla "Are you sure? (Y/N)" confirm dialog is short-circuited under `THUMBYONE_SLOT_MODE`.
+- Hold-MENU as a cross-slot chord isn't wired up in DOOM yet; use Main Menu → Quit Game.
+
+**Controls:**
+
+| Button | Action |
+|---|---|
+| D-pad | Move / menu navigate |
+| A | Fire / confirm |
+| B | Use / cancel (hold for automap) |
+| B + LB / B + RB | Prev / next weapon |
+| MENU | Main Menu (Save / Load / Options / Quit Game) |
+| LB + RB (hold 3 s) | Overlay menu (cheats, gamma, volume, warp) |
 
 ### MicroPython + Tiny Game Engine
 
@@ -325,8 +348,8 @@ MicroPython with the Tiny Game Engine C module baked in, running a custom C pick
 | D-pad | Step through games |
 | A | Launch the selected game |
 | B | Toggle favourite (★) for the highlighted game |
-| MENU | Open info overlay (battery, disk, sort, back to lobby) |
-| MENU (held in-game) | Open the in-game overlay — back to lobby or resume |
+| MENU (in picker) | Open info overlay (battery, disk, sort, back to lobby) |
+| MENU (held ~5 s in-game) | Return to lobby — brief "returning to picker..." splash, then reboot |
 
 **Game structure** in `/games/<name>/`:
 
@@ -455,43 +478,128 @@ Slots carry no tinyUSB stack at all in ThumbyOne-slot-mode builds. We strip tiny
 
 ## Per-slot architecture
 
+Every slot has a 520 KB SRAM budget and a ~250 MHz default clock (higher on overclock). Each has been individually tuned to maximise performance and compatibility while keeping RAM usage inside those limits. The lists below are the highlights — see the slot repos for the full story.
+
 ### NES / SMS / GG / GB slot
 
-- **Emulator cores** (all vendored under [`ThumbyNES/vendor/`](https://github.com/austinio7116/ThumbyNES/tree/main/vendor)):
-  - **Nofrendo** (GPLv2) — NES 6502 + PPU + APU.
-  - **smsplus** (GPLv2, from the retro-go fork) — Master System / Game Gear Z80 + VDP + PSG.
-  - **Peanut-GB** (MIT) — Game Boy DMG core.
-  - **minigb_apu** (MIT) — Game Boy 4-channel APU, paired with Peanut-GB.
-- **ROM load path**: picker walks the FAT cluster chain, computes the XIP address of a contiguous ROM file, hands nofrendo a direct pointer — zero-copy `.nes` mmap. Fragmented ROMs fall back to malloc; the picker runs an on-demand defragmenter when it detects them.
-- **Audio**: PWM + DMA-driven sample push; 22050 Hz, configurable per-ROM overclock for cores that need more than the default 250 MHz.
-- **LCD**: 128×128 GC9107 on SPI0 + DMA, bottom-up push per frame. `nes_lcd_teardown()` releases SPI and DMA cleanly before rom_chain (BAD things happen if the panel is mid-DMA when the bootrom reconfigures QMI).
-- **Saves / state**: per-ROM `<name>.sav` for battery-backed SRAM; save states in a separate slot format.
-- **Slot-mode adjustments**:
-  - ROM directory moves from root to `/roms/` (`ROMS_DIR_SLASH` macro).
-  - Boot splash + file-check diagnostic silent unless actually defragging.
-  - MSC + tinyUSB excluded from the build.
-  - Picker's settings menu grows a "Back to lobby" action.
+**Emulator cores** (all vendored under [`ThumbyNES/vendor/`](https://github.com/austinio7116/ThumbyNES/tree/main/vendor)):
+
+- **Nofrendo** (GPLv2) — NES 6502 + PPU + APU.
+- **smsplus** (GPLv2, from the retro-go fork) — Master System / Game Gear Z80 + VDP + PSG.
+- **Peanut-GB** (MIT) — Game Boy DMG core.
+- **minigb_apu** (MIT) — Game Boy 4-channel APU, paired with Peanut-GB.
+
+**Performance & compatibility:**
+
+- **Multi-core dispatcher** (`nes_device_main.c`) switches between Nofrendo / smsplus / Peanut-GB based on file extension; only one core is linked into the hot path per cart.
+- **Per-cart clock override** — global + per-ROM selection of 125 / 150 / 200 / 250 MHz; dispatcher re-runs `nes_lcd_init` + `nes_audio_pwm_init` on every launch so SPI dividers and audio IRQ rate follow the new clock correctly.
+- **Hot loops in SRAM** — `IRAM_ATTR` / `.time_critical.*` placement on the CPU+PPU inner loops so XIP cache misses never hit the frame budget. v1.01 also moved the smsplus Z80 core out of flash into RAM for a large SMS/GG speedup.
+- **Zero-copy XIP ROM execution** — the picker walks FAT cluster chains for any ROM ≥256 KB, checks contiguity, and hands the core a direct pointer into the XIP address space. Fragmented ROMs trigger the in-firmware defragmenter (`f_expand` reserves a contiguous chain, then streams the file through a 4 KB buffer).
+- **Per-system scalers** — NES 2:1 nearest or 2×2 box-blend to 128×120 letterbox; SMS FIT / BLEND / FILL (new 1.5× fill in v1.02); GG & GB asymmetric 5:4 × 9:8 nearest; a live-pan CROP mode where the cart keeps running while MENU + d-pad scrolls the 128-wide window over the native picture.
+- **Region detection** — iNES 2.0 byte-12, iNES 1.0 byte-9, with a filename fallback (`(E)`, `(PAL)`, `(Europe)`) — overridable per-ROM.
+- **Per-ROM save states** (NES / SMS: SNSS-tagged; GB: `'GBCS'`-tagged `gb_s` + APU memcpy) via a thin `thumby_state_bridge.[ch]` patch that macros `STATE_OPEN` / `STATE_WRITE` in nofrendo & smsplus over a single shared `FIL` for atomic save/load.
+- **Palette cycling** — six selectable palettes for NES and GB; SMS / GG drive their VDP palettes natively.
+- **Fast-forward 4× with audio preservation** — four cart frames per loop, only the newest rendered; audio ring untouched so FX don't stutter.
+- **30 s battery-SRAM autosave** + 90 s idle → LCD blank + tight sleep.
+- **Tabbed picker** with per-tab selection memory, favourites (hold B), 5–10 s B-hold to delete, live USB-activity rescan (polls MSC activity, rescans FAT after 400 ms of host quiet).
+
+**SRAM discipline:**
+
+- **One shared 32 KB RGB565 framebuffer** (`static uint16_t fb[128*128]`) across all three runners — no double-buffer.
+- **Per-core source framebuffers** (NES ~137 KB, SMS ~98 KB, GB ~92 KB) are **malloc'd by each core's `init()` and freed by `shutdown()`** — only the active core's buffer occupies heap.
+- **Cores coexist in BSS, not heap** — Nofrendo (~30 KB) + smsplus (~80 KB) + Peanut-GB (~30 KB) all present in the image, but only one is active at a time.
+- Menu backdrop is a reused `static uint16_t fb_dim[128*128]` — allocated once, only in use while the menu is open.
+- FAT scans use a single `static uint8_t fat_sec[512]`; defragger uses a single `static uint8_t buf[4096]` — no per-call mallocs.
+- Screenshots stream one row at a time (no 8 KB scratch buffer).
+- Typical free heap in-game: ~330 KB.
+
+**Slot-mode adjustments** (`#ifdef THUMBYONE_SLOT_MODE`):
+
+- ROMs + sidecars (saves, screenshots, state files, favourites) live under `/roms/` rather than the filesystem root.
+- Boot splash + file-check diagnostic silent unless the defragger is actually running.
+- MSC + tinyUSB excluded — ~15 KB flash + several KB RAM reclaimed.
+- Picker's settings menu grows a "Back to lobby" action; in-game menu gains the same.
+- `boot_filesystem()`'s auto-format on mount-failure is gated out — slots never wipe the shared FAT.
 
 ### PICO-8 slot
 
-- **Runtime**: clean-room PICO-8 fantasy console implementation (Lua 5.3 VM + PICO-8 API).
-- **Cart format**: `.p8.png` — PICO-8's native PNG-steganography format. Decoder in [`ThumbyP8/device/p8_p8png.c`](https://github.com/austinio7116/P8Thumb/blob/main/device/p8_p8png.c).
-- **On-device conversion**: PNG → tokenised Lua → compiled bytecode, persisted to the shared FAT alongside the source cart. Runs at boot if any un-converted carts are detected.
-- **Active-cart scratch**: PICO-8's `load()` call is implemented as a reboot into the same slot with a marker pointing at the requested cart. The 256 KB scratch at flash `0x620000` survives lobby round-trips and holds the intermediate state.
-- **Display**: 128×128 native → no scaling. Engine runs per-scanline to avoid allocating a full double-buffer.
-- **Audio**: 4 channels mixed into a PWM DMA FIFO, matching PICO-8's fm + noise envelopes.
-- **Memory model**: Lua VM is positioned at a fixed BSS address so large cart loads don't fragment the heap (see [feedback_heap_fragmentation.md](https://github.com/austinio7116/ThumbyOne)).
-- **Slot-mode adjustments**:
-  - Welcome / USB-mount-wait screen skipped.
-  - MSC + tinyUSB excluded.
-  - Picker menu grows a "Back to lobby" action.
+**Runtime**: clean-room PICO-8 fantasy console implementation. Uses **Lua 5.2.4** (`LUA_VERSION_NUM == 502` in [`ThumbyP8/lua/lua.h`](https://github.com/austinio7116/P8Thumb/blob/main/lua/lua.h)) — 5.2 and not 5.3 because 5.2's integer/bitwise story maps directly onto PICO-8's 16.16 fixed-point numeric model.
+
+**Performance & compatibility:**
+
+- **On-device cart conversion pipeline** (`.p8.png` → playable bytecode), running entirely on the Thumby:
+  - stb_image streaming PNG decode via file-I/O callbacks (no full PNG in heap).
+  - PXA decompressor for PICO-8's compressed code section.
+  - **shrinko8 streaming tokenizer + parser + emitter** — a C port of shrinko8's unminify pass; handles minified PICO-8 source and converts PICO-8's fixed-point bitwise operators (`band`, `bor`, `shl`, `rotl`, `flr`, `\`, `@`, `$`, `%`, `!=`, `+=` etc.) to their Lua 5.2 equivalents during emission.
+  - PICO-8 dialect character-level transforms: `\` → `p8idiv()`, `@` / `$` / `%` / `!=` → runtime calls, button glyphs → indices, `0b1010` binary → decimal, P8SCII high bytes → numeric escapes.
+  - `luaL_loadbuffer` + `lua_dump` → Lua bytecode, programmed into the 256 KB active-cart scratch partition at `0x620000`.
+  - One cart per boot cycle — prevents the ~260 KB PNG peak from fragmenting the Lua heap across multiple conversions.
+- **int32 16.16 fixed-point numerics** — `lua_Number = int32_t` interpreted bit-for-bit as PICO-8's fixed-point format. Bitwise ops work on 32-bit patterns with no float round-trip, so `0xbe74` round-trips through `band` / `bor` / `shl` as an address without precision loss.
+- **`_ENV` metatable fallback** — every source-level binding site gets `{__index = _G}` patched in so bare-global references in cart code still resolve under Lua 5.2's lexical env model.
+- **String byte-indexing via metatable** — `str[i]` returns the byte value (PICO-8 convention) via a custom `__index` on the string metatable.
+- **Multi-cart `load()` chain** — implemented as `watchdog_reboot` with `/.pending_load` marker + transition param plumbed through `stat(6)`; sub-carts hidden in `/.hidden` to declutter the picker.
+- **`menuitem(index, label, cb)`** — up to 5 cart-defined custom pause-menu items, fully interoperating with our Back-to-lobby entry.
+- **Full 4-channel audio synth** — 8 waveforms, pattern-advance with loop / stop flags, fade-in / fade-out, `fillp` patterns, `tline` tilemap blits, full P8SCII font rendering.
+
+**SRAM discipline:**
+
+- **XIP bytecode execution** — `lundump.c` patched so when the undump buffer address is in the XIP range (`0x10000000..0x11000000`, `IS_XIP_ADDR`), `Proto.code[]` and `Proto.lineinfo[]` become **direct flash pointers** instead of heap-copied arrays. `lfunc.c` patched so the GC never tries to free those XIP-resident arrays. Saves 40–80 KB of Lua heap per cart.
+- **Debug info stripped** at `lua_dump` — reclaims another 5–20 KB per cart.
+- **Capped allocator** — Lua VM hard-capped at 280 KB (`P8_LUA_HEAP_CAP`) so large carts OOM cleanly inside Lua rather than starving libc.
+- **PICO-8 machine memory is `static uint8_t mem[64 KB]`** — drawing writes 4-bit colour indices straight into that (not RGB565). The present step expands indices → RGB565 **one scanline at a time** through a reused `static uint16_t scanline[128]`. Halves the RAM cost of the screen.
+- **Cart ROM is `const uint8_t *` into XIP on device** (zero SRAM). Host build is the only path that malloc's it.
+- **Streaming shrinko8 uses ~90 KB peak** — no AST, no token array, the C call stack *is* the parse tree.
+- **Fixed-position Lua VM in BSS** — avoids heap fragmentation on successive cart loads.
+- **Reboot-on-exit** — quit-to-picker triggers a watchdog reboot, guaranteeing the Lua heap is reclaimed cleanly with zero fragmentation carryover.
+- **16 KB stack** (`PICO_STACK_SIZE=0x4000`) — default 2 KB is too small for PICO-8 C → Lua → C reentry.
+- BSS ~148 KB, free heap in-game ~356 KB (280 KB Lua cap + ~76 KB libc headroom).
+
+**Slot-mode adjustments**:
+
+- Welcome / USB-mount-wait screen skipped — direct to picker.
+- MSC + tinyUSB excluded.
+- Picker menu grows a "Back to lobby" action.
+- `boot_filesystem()` auto-format gated out.
 
 ### DOOM slot
 
-- Based on Graham Sanderson's [rp2040-doom](https://github.com/kilograham/rp2040-doom) port of Chocolate Doom.
-- Shareware IWAD embedded via `.incbin` — ~2.3 MB, fits in the 2.5 MB partition with room.
-- Pure XIP — the code runs direct from flash; no ROM load, no FAT access, no USB.
-- ThumbyOne doesn't modify DOOM's source beyond the linker script and a single `main()` preamble that calls `thumbyone_xip_fast_setup()` before the rp2040-doom init.
+Based on Graham Sanderson's [rp2040-doom](https://github.com/kilograham/rp2040-doom) port of Chocolate Doom, retargeted to RP2350 + Thumby Color. Shareware IWAD embedded via `.incbin` — ~2.3 MB, fits in the 2.5 MB partition with room. Pure XIP — the code runs direct from flash; no ROM load, no FAT access, no USB.
+
+**Performance & compatibility** (`#if THUMBY_NATIVE` / `#if THUMBYONE_SLOT_MODE`):
+
+- **Full 32-bit pointer model** — `shortptr_t` defanged to `void *` on RP2350; Doom's original 256 KB window / base-offset pointer compression is gone. Simpler, faster, fits the RP2350's memory map.
+- **Single-core display pipeline** — the original rp2040-doom used PIO scanvideo + core1 beam-racing. On Thumby we render into a 128×128 8-bit indexed framebuffer on core0, palette-convert to RGB565 on the fly, and DMA to the GC9107. All the scanline / PIO machinery deleted.
+- **Custom RGB565 melt wipe** in `i_video_thumby.c` — classic random-walk acceleration, operates directly on `g_fb`. The vanilla state machine is killed so the game tick keeps advancing during the wipe (audio / level state both continue).
+- **320×200 overlay buffer** (`v_overlay_buf`) for HUD / menu / intermission / automap — composited at vanilla coordinates then 2×2 box-blended down to 128×128, with a split Y-map so the 32-row status bar lands on exactly 16 native rows.
+- **Weapon sprite scaling fix** — `pspritescale = FRACUNIT * viewwidth / 320` (vanilla) not `/ 128`; weapon X centering uses the vanilla half-width (160); `BASEYCENTER = 57` so the weapon is vertically placed correctly.
+- **OPL2 + SFX mixer on core1** — emu8950 OPL2 native 49716 Hz output, downsampled to 22050 Hz then mixed with 8-channel ADPCM SFX via int32 accumulators with clamping. Core1 runs `multicore_lockout_victim_init()` so flash erase/program on core0 can NMI-pause core1 during saves.
+- **12-bit PWM DAC with triangular dither** (v1.2+) — up from 10-bit; eliminates quantisation noise. Loosened low-pass filter (1.5:1 ratio, ~85% new sample) for crisper SFX edges.
+- **Settings persistence in save slot 7** — FPS cap, controls scheme, volume, music, gamma, overlay preferences all survive power cycles.
+- **DOS-style boot log** — hooks the SDK's `stdio_driver_t` to capture `printf()` output during init and render it with the mini font (red header + grey scrolling text).
+- **Crash diagnostics** — HardFault handler renders a red screen with PC / LR; DWT watchpoint infrastructure + a blue diagnostic screen available for debugging hangs.
+- **Overlay menu** — hold LB + RB for 3 s: cheats (god, all-weapons, no-clip), level warp, gamma, volume / music sliders, control-scheme toggle, battery gauge.
+- **Flash-safe save system** — `M_SaveSelect` auto-fills slot names (no on-screen text entry), uses `flash_safe_execute()` for the NMI-based multicore lockout during erase + program.
+- **Auto-advance through the original's intro slides** — less tapping to start a game.
+
+**SRAM discipline:**
+
+- **160 KB fixed BSS zone** — `static byte zone[160 * 1024]` in `port/i_system_thumby.c` holds Doom's entire dynamic heap. Zero malloc in flight during play.
+- **8-bit indexed double-buffer** — `frame_buffer[2][SCREENWIDTH * SCREENHEIGHT]` = 2 × 128×128 bytes (= 32 KB), **not** RGB565. Palette expansion happens once per present into `g_fb`. Halves the front-buffer cost vs storing RGB565 per buffer.
+- **`list_buffer` aliased to both `render_cols` AND `flat_runs`** via `#define` — ~90 KB of BSS serves column data during the wall-render phase then repurposes as the flat cache during span rendering. The buffer is physically one allocation.
+- **Single 32 KB `g_fb` LCD buffer** — no double-buffer for RGB565; DMA completes before the next write.
+- **64 KB `v_overlay_buf`** reused every frame (cleared at frame top by `V_ClearOverlay()` — no separate HUD buffer).
+- **8 KB audio ring buffer** total.
+- **Stacks**: `PICO_STACK_SIZE=0x2000` on core0, **`PICO_CORE1_STACK_SIZE=0x800`** on core1 (audio loop is tight, 2 KB is enough).
+- **`PICO_HEAP_SIZE=0`** — libc heap disabled entirely. Doom allocates only via its zone.
+- **2 MB shareware WAD via `.incbin`** in `.rodata.doom1_whd` — executes / reads directly from XIP, never copied to RAM.
+- **`USE_THINKER_POOL=0`** — the original's thinker pool disabled after a 1-byte corruption bug in it.
+- **`DOOM_TINY=1 DOOM_SMALL=1`** — vendor's compressed-structures modes retained.
+
+**Slot-mode adjustments:**
+
+- **`M_QuitDOOM` short-circuits** — in-game Quit Game skips the vanilla "Are you sure?" dialog and calls `thumbyone_handoff_request_lobby()` inline under `#ifdef THUMBYONE_SLOT_MODE` (GCC inlines the function at `-O2` so linker `--wrap` alone isn't enough).
+- **`I_Quit` wrapped** — `doom_quit_handoff.c` wraps `I_Quit` to drain display DMA (50 ms) and hand off to the lobby, covering any fatal-exit paths (out-of-memory, `Z_Malloc` failure, etc.) that bypass the main Quit menu.
+- MSC + tinyUSB excluded.
 
 ### MicroPython + engine slot
 
@@ -520,12 +628,25 @@ main()
 
 **Launcher**: [`thumbyone_launcher.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/thumbyone_launcher.py) is a frozen module. Reads `/.active_game`, adds the game dir to `sys.path`, `os.chdir`s into it (so `TextureResource("sprite.bmp")` resolves relative to the game folder), initialises `engine_save` with a per-game namespace, `exec`s `main.py`. On exception, captures the traceback to `/.last_error.txt` before falling through.
 
+**`engine.reset()` → back-to-picker** — the MPY slot wraps `watchdog_reboot` via `-Wl,--wrap=watchdog_reboot` in [`thumbyone_reset_hook.c`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/thumbyone_reset_hook.c). MicroPython's `engine.reset()` and `machine.reset()` ultimately both go through `watchdog_reboot`; our wrap sets the handoff scratch to `THUMBYONE_SLOT_MPY` before calling the real function, so the chip reboots straight back into the MPY picker rather than the lobby. The **lobby-side** handoff path (`thumbyone_handoff_request_lobby`) uses `rom_reboot` instead of `watchdog_reboot`, bypassing the wrap — otherwise "Back to lobby" would be caught by the same wrap and loop back into MPY.
+
+**FatFs port** — the MPY slot runs stock upstream FatFs R0.15 (vendored in [`common/lib/fatfs/`](common/lib/fatfs/)), not MicroPython's historical ooFatFs fork. The `extmod/vfs_fat_diskio.c` shim was rewritten against the R0.15 API; the block device is [`common/fs/thumbyone_disk.c`](common/fs/thumbyone_disk.c), shared byte-for-byte with the lobby and other slots — a FAT written by MPY is guaranteed readable by NES / P8 / DOOM and vice versa.
+
+**SRAM discipline:**
+
+- **Frozen manifest pipeline** — launcher, `_boot_fat.py`, and assorted helpers are compiled to bytecode and frozen into the firmware image. No `.py` / `.mpy` files to pay FAT space for, no parse-time RAM on boot.
+- **Shared flash-write RMW buffer** — `rp2_flash.c` uses a single `static uint8_t s_rmw_buf[FLASH_ERASE_BLOCK]` (+ a `static uint32_t s_saved_atrans[4]` for ATRANS save/restore around flash ops); every `flash.writeblocks` call reuses them, no per-call mallocs.
+- **Shared MSC RMW buffer** — the lobby's `msc_disk.c` has one `static uint8_t s_msc_rmw_buf[FLASH_ERASE_SIZE]` that serves every host write.
+- **Fixed-size PIO state tables** — `rp2_state_machine_initial_pc[NUM_PIOS*4]`, `rp2_pio_instruction_memory_usage_mask[NUM_PIOS]` — no dynamic PIO allocation overhead.
+- **One-slot-at-a-time residency** — MPY gets the full 520 KB SRAM when running; no co-residency with NES / P8 / DOOM, so the MicroPython heap doesn't have to be pre-partitioned around sibling VMs.
+- **`/system/` assets stay in XIP** — fonts, splash graphics, launcher art all served from `.rodata` by `thumbyone_rom_vfs.c`, never copied into RAM. Cumulative saving: 376 KB of files that would otherwise live on the FAT and, if `in_ram=True`, in SRAM too.
+
 ## Lobby architecture
 
 - **Icon pipeline**: [`tools/pack_icons.py`](tools/pack_icons.py) runs at build time, reads the four PNGs in `lobby/icons/`, quantises each to a 16-colour adaptive palette, packs two 4-bit indices per byte → ~1.1 KB per icon + 32 bytes palette. Total icon data: ~4.8 KB, vs ~18 KB for raw RGB565. The blitter in [`lobby/lobby_icons.c`](lobby/lobby_icons.c) decodes on the fly — one shift + one palette lookup per pixel.
 - **Grid**: 2×2 of 48×48 tiles at positions `(12,12)`, `(68,12)`, `(12,68)`, `(68,68)`. D-pad navigation via XOR on the cursor (UP/DOWN flip bit 1, LEFT/RIGHT flip bit 0).
 - **Greyed tiles**: disabled slots (via `THUMBYONE_WITH_*` build flags) are drawn normally then per-channel right-shifted by 2 in place — a 1/4-brightness overlay that reads as "present but unavailable" rather than "missing".
-- **USB state row**: bottom strip re-renders every 100 ms to reflect mount / activity state. Idle → "hold MENU at boot"; mounted → green "USB connected"; transferring → yellow "USB transfer".
+- **USB state row**: top strip re-renders every 100 ms to reflect mount / activity state. Idle → dim-grey dot + "USB"; mounted → blue dot; transferring → red dot. The physical RGB LED (PWM on GP10/11/12) mirrors the same state at full brightness.
 
 ## Build system
 
