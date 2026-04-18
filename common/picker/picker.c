@@ -1239,6 +1239,43 @@ int thumbyone_picker_run(void) {
             if (just_pressed(PIN_A, &prev_a)) {
                 int real = g_order[sel];
                 const char *chosen = g_games[real].path;
+
+                /* Diagnostic splash so we can see where the launch
+                 * pipeline hangs. Stages are rendered to the LCD
+                 * before the corresponding step runs; whatever the
+                 * LCD shows after the picker disappears tells us
+                 * exactly how far we got.
+                 *
+                 *   "writing /.active_game"   — picker writing
+                 *   "unmounting"              — FatFs shutdown
+                 *   "LCD teardown"            — releasing SPI+DMA
+                 *   "passing to MicroPython"  — returning to main()
+                 *
+                 * If the LCD stays stuck on "passing to MicroPython"
+                 * the hang is in mp_init / _boot_fat / the launcher
+                 * (Python side, so MicroPython would normally own
+                 * the display from that point). If it stays on an
+                 * earlier stage, the corresponding C call hasn't
+                 * returned.
+                 */
+                fb_fill(COL_BG);
+                int tw = nes_font_width_2x("LAUNCH");
+                nes_font_draw_2x(g_fb, "LAUNCH", (128 - tw) / 2, 20, COL_HEAD);
+                /* Show the game name so the user can confirm the
+                 * right thing is being launched. */
+                const char *nm = g_title ? g_title : g_games[real].name;
+                char shown[28];
+                strncpy(shown, nm, sizeof(shown) - 1);
+                shown[sizeof(shown) - 1] = 0;
+                while (nes_font_width(shown) > 120 && strlen(shown) > 1) {
+                    shown[strlen(shown) - 1] = 0;
+                }
+                int nw = nes_font_width(shown);
+                nes_font_draw(g_fb, shown, (128 - nw) / 2, 48, COL_FG);
+                nes_font_draw(g_fb, "writing", 30, 74, COL_DIM);
+                nes_font_draw(g_fb, ".active_game", 22, 84, COL_TEXT);
+                present_blocking();
+
                 if (write_active_game(chosen) < 0) {
                     render_error("write failed", "flash locked?");
                     sleep_ms(2000);
@@ -1247,8 +1284,27 @@ int thumbyone_picker_run(void) {
                 }
                 favs_save();
                 sort_mode_save();
+
+                fb_rect(10, 70, 110, 30, COL_BG);
+                nes_font_draw(g_fb, "unmounting", 30, 74, COL_DIM);
+                nes_font_draw(g_fb, "FAT",        50, 84, COL_TEXT);
+                present_blocking();
                 f_unmount("");
+
+                fb_rect(10, 70, 110, 30, COL_BG);
+                nes_font_draw(g_fb, "LCD", 50, 74, COL_DIM);
+                nes_font_draw(g_fb, "teardown", 30, 84, COL_TEXT);
+                present_blocking();
                 nes_lcd_wait_idle();
+
+                /* Draw the "handing off" frame *before* teardown —
+                 * teardown resets SPI+DMA so no later presents are
+                 * possible until MicroPython re-inits the display. */
+                fb_rect(10, 70, 110, 30, COL_BG);
+                nes_font_draw(g_fb, "passing to",  26, 74, COL_DIM);
+                nes_font_draw(g_fb, "MicroPython", 22, 84, COL_TEXT);
+                present_blocking();
+
                 nes_lcd_teardown();
                 return 0;
             }
