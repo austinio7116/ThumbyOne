@@ -238,19 +238,19 @@ static void led_set_rgb(int r, int g, int b) {
 }
 
 static void led_set_off(void)    { led_set_rgb(0, 0, 0); }
-/* The "white" default across the rest of the Thumby Color firmware
- * is actually just pure green at full PWM — see engine_io_rp3.c's
- * default indicator (0b0000011111100000 = pure green 0x07E0). The
- * green die is bright enough at full drive to read as white-ish.
- * Match that idle colour so the LED looks the same in the lobby as
- * in a game.
- *
- * USB states use different hues so they're visibly distinct from
- * the idle white-ish green: cyan (green + blue) for "host mounted"
- * and warm amber (red + green) for "transfer in flight". */
-static void led_set_white(void)  { led_set_rgb(0, 200, 0); }
-static void led_set_green(void)  { led_set_rgb(0, 80, 80); }  /* actually cyan */
-static void led_set_yellow(void) { led_set_rgb(120, 70, 0); } /* amber — warmer than pure yellow */
+/* DIAGNOSTIC: each state forces a single primary so we can tell
+ * which GPIO channel is actually driving the LED on THIS device.
+ * Previous 'white = pure green' + 'mounted = cyan' + 'xfer = amber'
+ * was still reading as red/pink on-hardware, which suggests the
+ * green channel isn't firing. Flash this and tell me:
+ *    idle (no USB)  should be  PURE GREEN     (pin 10 / PWM5 A)
+ *    mounted        should be  PURE BLUE      (pin 12 / PWM6 A)
+ *    transferring   should be  PURE RED       (pin 11 / PWM5 B)
+ * Whichever colour ACTUALLY appears tells us which physical LED
+ * GPIO 10, 11, 12 each drive on your hardware. */
+static void led_set_white(void)  { led_set_rgb(0, 255, 0); }    /* green test */
+static void led_set_green(void)  { led_set_rgb(0, 0, 255); }    /* blue test  */
+static void led_set_yellow(void) { led_set_rgb(255, 0, 0); }    /* red test   */
 
 /* Per-pin PWM init — matches the engine's engine_io_rp3_pwm_setup()
  * pattern exactly. Calling pwm_init once per pin (rather than once
@@ -446,20 +446,63 @@ static const char *const g_grid_labels[4] = {
     "MICROPYTHON",
 };
 
+/* ThumbyOne palette — dark navy header/footer bars with a cyan
+ * accent stripe + cyan "ThumbyOne" title, echoing the tagline's
+ * logo colours. */
+#define COL_BAR_BG   0x0008    /* deep navy */
+#define COL_BAR_LINE 0x07FF    /* cyan accent */
+#define COL_BAR_FG   0x07FF    /* cyan text on the bar */
+#define COL_SEL_CORN 0xFFE0    /* bright yellow selection accent */
+
+/* Draw bright yellow 4-px corner brackets around (x, y) to
+ * (x+GRID_TILE_SIZE, y+GRID_TILE_SIZE). Gives the selected tile a
+ * visible accent beyond just 'brighter than the others' — hits
+ * the eye even from an angle where dim/bright contrast alone is
+ * harder to read. */
+static void draw_selection_corners(int x, int y) {
+    const int L = 5;   /* corner arm length */
+    const int P = 1;   /* 1 px offset outside the tile */
+    int right  = x + GRID_TILE_SIZE - 1;
+    int bottom = y + GRID_TILE_SIZE - 1;
+    /* Top-left */
+    for (int i = 0; i < L; ++i) {
+        if ((unsigned)(y - P) < 128 && (unsigned)(x + i) < 128) g_fb[(y - P) * 128 + (x + i)] = COL_SEL_CORN;
+        if ((unsigned)(y + i) < 128 && (unsigned)(x - P) < 128) g_fb[(y + i) * 128 + (x - P)] = COL_SEL_CORN;
+    }
+    /* Top-right */
+    for (int i = 0; i < L; ++i) {
+        if ((unsigned)(y - P) < 128 && (unsigned)(right - i) < 128) g_fb[(y - P) * 128 + (right - i)] = COL_SEL_CORN;
+        if ((unsigned)(y + i) < 128 && (unsigned)(right + P) < 128) g_fb[(y + i) * 128 + (right + P)] = COL_SEL_CORN;
+    }
+    /* Bottom-left */
+    for (int i = 0; i < L; ++i) {
+        if ((unsigned)(bottom + P) < 128 && (unsigned)(x + i) < 128) g_fb[(bottom + P) * 128 + (x + i)] = COL_SEL_CORN;
+        if ((unsigned)(bottom - i) < 128 && (unsigned)(x - P) < 128) g_fb[(bottom - i) * 128 + (x - P)] = COL_SEL_CORN;
+    }
+    /* Bottom-right */
+    for (int i = 0; i < L; ++i) {
+        if ((unsigned)(bottom + P) < 128 && (unsigned)(right - i) < 128) g_fb[(bottom + P) * 128 + (right - i)] = COL_SEL_CORN;
+        if ((unsigned)(bottom - i) < 128 && (unsigned)(right + P) < 128) g_fb[(bottom - i) * 128 + (right + P)] = COL_SEL_CORN;
+    }
+}
+
 static void render_home(void) {
     for (int i = 0; i < 128 * 128; ++i) g_fb[i] = COL_BG;
 
-    /* Slim title strip — keeps vertical room for the grid + label. */
-    int w = nes_font_width("ThumbyOne");
-    nes_font_draw(g_fb, "ThumbyOne", 2, 2, COL_TITLE);
-    (void)w;
+    /* Header bar: navy background, cyan title, cyan underline. */
+    for (int y = 0; y < 11; ++y)
+        for (int x = 0; x < 128; ++x)
+            g_fb[y * 128 + x] = COL_BAR_BG;
+    for (int x = 0; x < 128; ++x) g_fb[11 * 128 + x] = COL_BAR_LINE;
+    nes_font_draw(g_fb, "ThumbyOne", 2, 2, COL_BAR_FG);
 
     /* Grid tiles. Each tile is drawn at full brightness first, then
      * dimmed in place as appropriate:
      *   - slot not present in this build → 1/4 brightness
      *   - slot present but not under the cursor → 1/2 brightness
-     *   - cursor tile → full brightness (no dim applied)
-     * Selection is conveyed by brightness alone — no border box. */
+     *   - cursor tile → full brightness + yellow corner brackets
+     * Corners are drawn outside the 48x48 icon so they don't eat
+     * any actual artwork. */
     for (int i = 0; i < 4 && i < (int)lobby_icons_count; ++i) {
         int ox, oy;
         grid_tile_origin(i, &ox, &oy);
@@ -469,16 +512,23 @@ static void render_home(void) {
         } else if (i != g_grid_cursor) {
             dim_tile(ox, oy, 1);        /* gentle dim — not selected */
         }
+        if (i == g_grid_cursor && g_grid_slot_present[i]) {
+            draw_selection_corners(ox, oy);
+        }
     }
 
-    /* System label under the grid. Centred, bright white to echo the
-     * "activated" feel of the undimmed selected tile. */
+    /* Footer bar: navy background, cyan underline, system name in
+     * cyan centred on the navy. */
+    for (int y = 117; y < 128; ++y)
+        for (int x = 0; x < 128; ++x)
+            g_fb[y * 128 + x] = COL_BAR_BG;
+    for (int x = 0; x < 128; ++x) g_fb[116 * 128 + x] = COL_BAR_LINE;
     {
         const char *label = g_grid_labels[g_grid_cursor];
         uint16_t col = g_grid_slot_present[g_grid_cursor]
-                         ? COL_TEXT : COL_USB_OFF;   /* dim grey for disabled */
+                         ? COL_BAR_FG : COL_USB_OFF;   /* dim for disabled */
         int lw = nes_font_width(label);
-        nes_font_draw(g_fb, label, (128 - lw) / 2, 119, col);
+        nes_font_draw(g_fb, label, (128 - lw) / 2, 120, col);
     }
 
     /* Paint the USB indicator into the top-right strip using the
@@ -489,7 +539,7 @@ static void render_home(void) {
         usb_row_state_t st = g_usb_row_state;
         for (int y = 0; y < 11; ++y)
             for (int x = 100; x < 128; ++x)
-                g_fb[y * 128 + x] = COL_BG;
+                g_fb[y * 128 + x] = COL_BAR_BG;
         uint16_t indicator =
             st == USB_ROW_ACTIVE ? COL_USB_BUSY :
             st == USB_ROW_READY  ? COL_USB_ON   :
@@ -1019,7 +1069,16 @@ int main(void) {
                     pending_slot = -2;
                     pending_since_us = (uint64_t)time_us_64();
                 } else {
-                    /* Menu closed — redraw home and carry on. */
+                    /* Menu closed via MENU/B/close. Wait for ALL
+                     * input buttons to be released so the same
+                     * press that closed the menu doesn't get
+                     * re-read by the outer loop (MENU would
+                     * immediately re-open it, A-on-close would
+                     * then launch the cursor tile). */
+                    while (btn_menu_pressed() || btn_a_pressed() ||
+                           btn_b_pressed()) {
+                        lobby_usb_task(); sleep_ms(5);
+                    }
                     render_home();
                 }
             }
