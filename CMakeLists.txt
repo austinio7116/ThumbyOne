@@ -53,6 +53,7 @@ add_subdirectory(common)
 # embedded.
 add_executable(lobby
     lobby/lobby_main.c
+    lobby/lobby_usb.c
     ${THUMBYONE_PICKER_UI_SRC}
     ${THUMBYONE_COMMON_SRC}
     ${THUMBYONE_COMMON_FS_SRC}
@@ -64,14 +65,21 @@ target_include_directories(lobby PRIVATE
     ${THUMBYONE_COMMON_INCLUDE}
     ${THUMBYONE_FATFS_INCLUDE}
 )
+# tusb_config.h lives in lobby/ — put the lobby dir BEFORE the
+# tinyUSB include search so our config is picked up rather than
+# tinyUSB's default.
+target_include_directories(lobby BEFORE PRIVATE lobby)
 target_link_libraries(lobby PRIVATE
     pico_stdlib
     pico_bootrom
+    pico_unique_id
     hardware_watchdog
     hardware_gpio
     hardware_spi
     hardware_dma
     hardware_flash
+    tinyusb_device
+    tinyusb_board
 )
 pico_embed_pt_in_binary(lobby ${THUMBYONE_PT_JSON})
 pico_set_uf2_family(lobby "absolute")

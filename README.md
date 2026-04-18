@@ -1,5 +1,9 @@
 # ThumbyOne
 
+## The One Firmware
+
+*One firmware to rule them all, one lobby to find them. One UF2 to bring them all, and in the Thumby bind them.*
+
 Unified multi-boot firmware for the TinyCircuits Thumby Color.
 
 One UF2 image that bundles any combination of:

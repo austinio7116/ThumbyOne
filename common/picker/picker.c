@@ -1,26 +1,27 @@
 /*
- * ThumbyOne MPY-slot C picker — hero view.
+ * ThumbyOne MPY-slot C picker — hero view + menu overlay.
  *
- * Self-contained: initialises LCD, buttons, and a FAT mount on
- * the shared volume. Scans /games/<name>/main.py to build a list,
- * renders a one-per-screen hero view (big icon + title + blurb),
- * and on A-press writes the chosen directory path to /.active_game
- * before unmounting. MicroPython's _boot_fat.py then mounts the
- * same FAT, and the frozen thumbyone_launcher.py reads the file
- * and execs the game.
+ * Runs before MicroPython is initialised. Mounts the shared FAT,
+ * scans /games/<name>/main.py, and renders a single-game hero view
+ * with icon + title + description. MENU opens a menu overlay with
+ * battery / disk / firmware info, favourite toggle, sort-order
+ * cycling, and the return-to-lobby action.
  *
- * Per-game assets used by the hero view:
- *   /games/<name>/icon.bmp                — 16 bpp, any size up to 64x64
- *   /games/<name>/arcade_description.txt  — first line is the title,
- *                                            remaining lines are the
- *                                            description blurb.
- * Both are optional; the picker falls back to the directory name
- * for the title and a placeholder rectangle for the icon when an
- * asset is missing or malformed.
+ * On launch (A), writes the chosen directory to /.active_game and
+ * tears down the LCD + SPI/DMA so the Tiny Game Engine can claim
+ * them cleanly when the game does `import engine_main`.
  *
- * Keeping the picker in C (not Python) means the LCD lights up
- * the instant the slot chains from the lobby, with no MicroPython
- * startup latency.
+ * Per-game assets (all optional):
+ *   /games/<name>/icon.bmp                — 16 bpp RGB565 up to 64x64
+ *   /games/<name>/arcade_description.txt  — line 1 = title, rest =
+ *                                            body; optional "Author: X"
+ *                                            line used for sort order.
+ *
+ * Persisted picker state (under the shared FAT):
+ *   /.favs           — newline-separated list of favourite dir names
+ *   /.picker_sort    — single byte: sort mode index
+ *   /.active_game    — the chosen /games/<name> path (consumed by
+ *                       thumbyone_launcher.py after mp_init)
  */
 #include "picker.h"
 
@@ -31,6 +32,7 @@
 #include "pico/time.h"
 #include "hardware/gpio.h"
 #include "hardware/clocks.h"
+#include "hardware/adc.h"
 
 #include "lcd_gc9107.h"
 #include "font.h"
@@ -39,11 +41,15 @@
 #include "thumbyone_fs.h"
 #include "thumbyone_handoff.h"
 
-/* --- button pins ----------------------------------------------------
- * Matches engine_io_rp3.h so the C picker and the engine agree on
- * the board's wiring. GP4 is NOT a button — it's the LCD RST pin
- * (see lcd_gc9107.c) — claiming it here would fight the LCD
- * driver and leave the panel blank. */
+/* --- build-time firmware identity -------------------------------- */
+/* THUMBYONE_FW_VERSION is optionally set by the parent CMake via
+ * -DTHUMBYONE_FW_VERSION=\"abc1234\". Fallback is a short marker so
+ * the info strip always has something to show. */
+#ifndef THUMBYONE_FW_VERSION
+#define THUMBYONE_FW_VERSION "dev"
+#endif
+
+/* --- button pins (match engine_io_rp3.h) ------------------------- */
 #define PIN_LEFT        0
 #define PIN_UP          1
 #define PIN_RIGHT       2
@@ -54,58 +60,91 @@
 #define PIN_B          25
 #define PIN_MENU       26
 
-/* --- palette ------------------------------------------------------- */
+/* --- palette ----------------------------------------------------- */
 #define COL_BG      0x0000
-#define COL_PANEL   0x10A2   /* dark blue-grey for hero card   */
-#define COL_TITLE   0x07FF   /* cyan for the "MPY" banner       */
-#define COL_FG      0xFFFF   /* pure white for the game title   */
-#define COL_TEXT    0xDEFB   /* slightly dim off-white for body */
-#define COL_DIM     0x8410   /* grey for footers / hints        */
-#define COL_ACCENT  0xFFE0   /* yellow for the position counter */
-#define COL_WARN    0xFC00   /* orange — MENU hold hint         */
-#define COL_ERR     0xF800   /* red — FS error screen           */
+#define COL_PANEL   0x10A2   /* dark blue-grey for info/menu panels */
+#define COL_PANEL_HL 0x20C5  /* slightly lighter highlight row      */
+#define COL_TITLE   0x07FF   /* cyan for the "MPY" banner           */
+#define COL_FG      0xFFFF   /* pure white for game title           */
+#define COL_TEXT    0xDEFB   /* dim off-white for body              */
+#define COL_DIM     0x8410   /* grey for footers / hints            */
+#define COL_ACCENT  0xFFE0   /* yellow for position counter + fav   */
+#define COL_GOOD    0x07E0   /* green for charging / OK             */
+#define COL_WARN    0xFC00   /* orange — MENU hold hint             */
+#define COL_ERR     0xF800   /* red — FS error screen               */
 
-/* --- buffers ------------------------------------------------------- */
+/* --- buffers ----------------------------------------------------- */
 static uint16_t g_fb[128 * 128] __attribute__((aligned(4)));
 
-/* One decoded icon lives here. Re-filled whenever the selection
- * changes. 64x64 is the canonical icon size we designed the layout
- * around; smaller icons (e.g. 38x38) get centred inside the slot. */
 #define ICON_MAX    64
 static uint16_t g_icon_px[ICON_MAX * ICON_MAX] __attribute__((aligned(4)));
-static int      g_icon_w;     /* 0 when no icon is loaded */
+static int      g_icon_w;
 static int      g_icon_h;
 
-/* Description-blurb storage. We read up to DESC_CAP bytes from
- * arcade_description.txt and split it into lines in place (NUL-
- * terminating each one). The first non-empty line is the title,
- * the rest are the body; blank separators are collapsed. */
+/* Description storage: full raw text, plus parsed pointers. */
 #define DESC_CAP       512
 #define DESC_MAX_LINES 8
 static char   g_desc_buf[DESC_CAP + 1];
 static char  *g_title;
 static char  *g_body[DESC_MAX_LINES];
 static int    g_body_count;
+static char  *g_author;    /* points inside g_desc_buf or NULL */
 
-/* --- game list ----------------------------------------------------- */
+/* --- game list --------------------------------------------------- */
 #define MAX_GAMES        32
 #define MAX_NAME_LEN     32
 #define PICKER_PATH_CAP  64
+#define MAX_AUTHOR_LEN   24
 
 typedef struct {
     char name[MAX_NAME_LEN + 1];
-    char path[PICKER_PATH_CAP];   /* "/games/<name>" */
+    char path[PICKER_PATH_CAP];
+    char author[MAX_AUTHOR_LEN + 1];   /* cached for sort-by-author */
+    bool favourite;
 } picker_game_t;
 
 static picker_game_t g_games[MAX_GAMES];
 static int g_game_count = 0;
+/* Ordered indices into g_games[]. Sort operations rewrite this
+ * without touching the underlying records — keeps favourites +
+ * author lookups O(1) by direct index. */
+static int g_order[MAX_GAMES];
 
-/* --- button helpers ----------------------------------------------- */
+/* --- sort ordering ----------------------------------------------- */
+typedef enum {
+    SORT_NAME   = 0,
+    SORT_FAV    = 1,
+    SORT_AUTHOR = 2,
+    SORT_COUNT  = 3,
+} sort_mode_t;
+static sort_mode_t g_sort = SORT_NAME;
+static const char * const sort_label[SORT_COUNT] = {
+    "Name", "Fav first", "Author",
+};
+
+/* --- favourites -------------------------------------------------- */
+#define FAVS_PATH "/.favs"
+static bool g_favs_dirty = false;
+
+/* --- menu state -------------------------------------------------- */
+typedef enum {
+    MI_FAVOURITE = 0,
+    MI_SORT,
+    MI_LOBBY,
+    MI_CLOSE,
+    MI_COUNT,
+} menu_item_t;
+
+static bool g_menu_open = false;
+static int  g_menu_cursor = 0;
+static bool g_menu_lobby_requested = false;
+
+/* --- button helpers --------------------------------------------- */
 static bool btn(uint pin) { return !gpio_get(pin); }
 
 static void buttons_init(void) {
     const uint pins[] = {
-        PIN_UP, PIN_DOWN, PIN_LEFT, PIN_RIGHT,
+        PIN_LEFT, PIN_UP, PIN_RIGHT, PIN_DOWN,
         PIN_LB, PIN_A, PIN_RB, PIN_B, PIN_MENU,
     };
     for (size_t i = 0; i < sizeof(pins) / sizeof(pins[0]); ++i) {
@@ -122,7 +161,47 @@ static bool just_pressed(uint pin, bool *prev) {
     return edge;
 }
 
-/* --- screen helpers ----------------------------------------------- */
+/* --- battery (inline — avoids pulling NES slot sources) --------- */
+#define BATT_GPIO     29
+#define BATT_ADC_CH    3
+#define ADC_REF_V    3.3f
+#define ADC_MAX_CNT  4095
+#define HALF_MIN_V   (1.4f + 0.05f)   /* ~2.9 V actual */
+#define HALF_MAX_V   (2.0f - 0.15f)   /* ~3.7 V actual */
+
+static bool g_adc_ready = false;
+
+static void battery_init(void) {
+    if (g_adc_ready) return;
+    adc_init();
+    adc_gpio_init(BATT_GPIO);
+    g_adc_ready = true;
+}
+
+static float battery_half_voltage(void) {
+    battery_init();
+    adc_select_input(BATT_ADC_CH);
+    /* Discard the first sample after a channel switch — RP2350 ADC
+     * returns the previous channel's in-flight reading. */
+    (void)adc_read();
+    uint16_t raw = adc_read();
+    return (float)raw * ADC_REF_V / (float)ADC_MAX_CNT;
+}
+
+static float battery_voltage(void)  { return 2.0f * battery_half_voltage(); }
+static bool  battery_charging(void) { return battery_half_voltage() >= HALF_MAX_V; }
+static int   battery_percent(void) {
+    float h = battery_half_voltage();
+    if (h <= HALF_MIN_V) return 0;
+    if (h >= HALF_MAX_V) return 100;
+    float frac = (h - HALF_MIN_V) / (HALF_MAX_V - HALF_MIN_V);
+    int pct = (int)(frac * 100.0f + 0.5f);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    return pct;
+}
+
+/* --- screen helpers --------------------------------------------- */
 static void fb_fill(uint16_t c) {
     for (int i = 0; i < 128 * 128; ++i) g_fb[i] = c;
 }
@@ -139,7 +218,10 @@ static void fb_rect(int x, int y, int w, int h, uint16_t c) {
     }
 }
 
-/* Blit an uint16_t source image at (dst_x, dst_y) with clipping. */
+static void fb_hline(int x, int y, int w, uint16_t c) {
+    fb_rect(x, y, w, 1, c);
+}
+
 static void fb_blit(const uint16_t *src, int sw, int sh, int dst_x, int dst_y) {
     for (int y = 0; y < sh; ++y) {
         int dy = dst_y + y;
@@ -157,7 +239,239 @@ static void present_blocking(void) {
     nes_lcd_wait_idle();
 }
 
-/* --- /games/ scan -------------------------------------------------- */
+/* --- string helpers --------------------------------------------- */
+static size_t rtrim(char *s) {
+    size_t n = strlen(s);
+    while (n > 0) {
+        unsigned char c = (unsigned char)s[n - 1];
+        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') break;
+        s[--n] = '\0';
+    }
+    return n;
+}
+
+/* Fill buf with decimal `v`. Buf must be at least 6 chars for values
+ * up to 99999. Returns length. Used where snprintf triggers format-
+ * truncation warnings at -Werror with small bufs. */
+static int int_to_str(int v, char *buf) {
+    if (v < 0) v = 0;
+    char tmp[8];
+    int n = 0;
+    if (v == 0) { tmp[n++] = '0'; }
+    else { while (v > 0 && n < 7) { tmp[n++] = '0' + (v % 10); v /= 10; } }
+    for (int i = 0; i < n; ++i) buf[i] = tmp[n - 1 - i];
+    buf[n] = '\0';
+    return n;
+}
+
+/* Build "/games/<name>/<leaf>". Returns 0 on success, -1 if the
+ * buffer is too small to hold the result. */
+static int build_asset_path(char *out, size_t cap,
+                            const char *game_path, const char *leaf) {
+    size_t gp_len   = strlen(game_path);
+    size_t leaf_len = strlen(leaf);
+    if (gp_len + 1 + leaf_len + 1 > cap) return -1;
+    memcpy(out, game_path, gp_len);
+    out[gp_len] = '/';
+    memcpy(out + gp_len + 1, leaf, leaf_len + 1);
+    return 0;
+}
+
+/* --- per-game asset load ---------------------------------------- */
+
+static void load_icon(const char *game_path) {
+    g_icon_w = 0;
+    g_icon_h = 0;
+    char path[PICKER_PATH_CAP + 16];
+    if (build_asset_path(path, sizeof(path), game_path, "icon.bmp") < 0) return;
+    int w = 0, h = 0;
+    if (thumbyone_picker_bmp_load(path, g_icon_px, ICON_MAX * ICON_MAX, &w, &h) == 0) {
+        g_icon_w = w;
+        g_icon_h = h;
+    }
+}
+
+/* Extract the author name from a description buffer in place.
+ * Looks for a line starting with "Author:" (case-insensitive) and
+ * returns a pointer into the buffer to the trimmed value, or NULL. */
+static char *find_author_line(char *start) {
+    char *p = start;
+    while (*p) {
+        /* Skip leading whitespace on the line. */
+        while (*p == ' ' || *p == '\t') ++p;
+        /* Match "Author" case-insensitively. */
+        if ((p[0] == 'A' || p[0] == 'a') &&
+            (p[1] == 'u' || p[1] == 'U') &&
+            (p[2] == 't' || p[2] == 'T') &&
+            (p[3] == 'h' || p[3] == 'H') &&
+            (p[4] == 'o' || p[4] == 'O') &&
+            (p[5] == 'r' || p[5] == 'R')) {
+            char *q = p + 6;
+            while (*q == ' ' || *q == '\t' || *q == ':') ++q;
+            /* Scan to newline, NUL-terminate there. */
+            char *val = q;
+            while (*q && *q != '\n' && *q != '\r') ++q;
+            if (*q) *q++ = '\0';
+            rtrim(val);
+            if (*val) return val;
+        }
+        /* Advance to next line. */
+        while (*p && *p != '\n') ++p;
+        if (*p == '\n') ++p;
+    }
+    return NULL;
+}
+
+/* Load /games/<name>/arcade_description.txt into g_desc_buf and
+ * split into title + body + author. Title falls back to dir name. */
+static void load_description(const picker_game_t *g) {
+    g_title = (char *)g->name;
+    g_body_count = 0;
+    g_author = NULL;
+
+    char path[PICKER_PATH_CAP + 32];
+    if (build_asset_path(path, sizeof(path), g->path, "arcade_description.txt") < 0) {
+        return;
+    }
+
+    FIL f;
+    if (f_open(&f, path, FA_READ) != FR_OK) return;
+    UINT br = 0;
+    if (f_read(&f, g_desc_buf, DESC_CAP, &br) != FR_OK) {
+        f_close(&f);
+        return;
+    }
+    f_close(&f);
+    g_desc_buf[br] = '\0';
+
+    /* Extract "Author:" before we tokenise on '\n', so find_author_line
+     * walks the pristine buffer. We'll then re-scan for title + body
+     * (the body scan will skip the author line naturally since it
+     * contains a colon and tends to be near the bottom). */
+    g_author = find_author_line(g_desc_buf);
+
+    char *title = NULL;
+    char *p = g_desc_buf;
+    while (*p && g_body_count < DESC_MAX_LINES) {
+        char *line = p;
+        while (*p && *p != '\n' && *p != '\r') ++p;
+        if (*p == '\r') { *p = '\0'; ++p; }
+        if (*p == '\n') { *p = '\0'; ++p; }
+        rtrim(line);
+        if (*line == '\0') continue;
+        /* Skip the Author line when building the body — the menu
+         * shows it separately. Match case-insensitively. */
+        if ((line[0] == 'A' || line[0] == 'a') &&
+            strlen(line) > 7 &&
+            (line[1] == 'u' || line[1] == 'U') &&
+            (line[2] == 't' || line[2] == 'T') &&
+            (line[3] == 'h' || line[3] == 'H') &&
+            (line[4] == 'o' || line[4] == 'O') &&
+            (line[5] == 'r' || line[5] == 'R')) {
+            /* Looks like the Author line; already captured. */
+            continue;
+        }
+        if (!title) {
+            title = line;
+        } else {
+            g_body[g_body_count++] = line;
+        }
+    }
+    if (title) g_title = title;
+}
+
+static void load_selection_assets(int order_idx) {
+    if (order_idx < 0 || order_idx >= g_game_count) {
+        g_icon_w = g_icon_h = 0;
+        g_title = NULL;
+        g_body_count = 0;
+        g_author = NULL;
+        return;
+    }
+    int real = g_order[order_idx];
+    load_icon(g_games[real].path);
+    load_description(&g_games[real]);
+}
+
+/* --- favourites -------------------------------------------------- */
+
+/* Look a name up in /.favs via streaming read. Returns true if the
+ * exact name is present as a line. */
+static bool favs_contains(const char *name) {
+    FIL f;
+    if (f_open(&f, FAVS_PATH, FA_READ) != FR_OK) return false;
+    char line[MAX_NAME_LEN + 2];
+    size_t pos = 0;
+    UINT br = 0;
+    char ch;
+    bool match = false;
+    while (f_read(&f, &ch, 1, &br) == FR_OK && br == 1) {
+        if (ch == '\n' || ch == '\r') {
+            line[pos] = '\0';
+            if (pos > 0 && strcmp(line, name) == 0) { match = true; break; }
+            pos = 0;
+        } else if (pos < sizeof(line) - 1) {
+            line[pos++] = ch;
+        }
+    }
+    if (!match && pos > 0) {
+        line[pos] = '\0';
+        if (strcmp(line, name) == 0) match = true;
+    }
+    f_close(&f);
+    return match;
+}
+
+/* Write the favourite flags back to /.favs. Rebuilds the whole
+ * file; small enough (<= MAX_GAMES * 33 bytes) to do in one shot. */
+static void favs_save(void) {
+    if (!g_favs_dirty) return;
+    FIL f;
+    if (f_open(&f, FAVS_PATH, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) {
+        g_favs_dirty = false;   /* best-effort — don't re-try forever */
+        return;
+    }
+    for (int i = 0; i < g_game_count; ++i) {
+        if (!g_games[i].favourite) continue;
+        UINT wn = 0;
+        f_write(&f, g_games[i].name, strlen(g_games[i].name), &wn);
+        f_write(&f, "\n", 1, &wn);
+    }
+    f_close(&f);
+    g_favs_dirty = false;
+}
+
+/* Populate g_games[i].favourite from /.favs at startup. */
+static void favs_load_all(void) {
+    for (int i = 0; i < g_game_count; ++i) {
+        g_games[i].favourite = favs_contains(g_games[i].name);
+    }
+    g_favs_dirty = false;
+}
+
+/* --- sort persistence ------------------------------------------- */
+#define SORT_PATH "/.picker_sort"
+
+static void sort_mode_load(void) {
+    FIL f;
+    if (f_open(&f, SORT_PATH, FA_READ) != FR_OK) return;
+    UINT br = 0;
+    uint8_t b = 0;
+    f_read(&f, &b, 1, &br);
+    f_close(&f);
+    if (br == 1 && b < SORT_COUNT) g_sort = (sort_mode_t)b;
+}
+
+static void sort_mode_save(void) {
+    FIL f;
+    if (f_open(&f, SORT_PATH, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) return;
+    uint8_t b = (uint8_t)g_sort;
+    UINT wn = 0;
+    f_write(&f, &b, 1, &wn);
+    f_close(&f);
+}
+
+/* --- /games/ scan ----------------------------------------------- */
 
 static int has_main_py(const char *game_name) {
     size_t name_len = strlen(game_name);
@@ -170,15 +484,30 @@ static int has_main_py(const char *game_name) {
     return (f_stat(path, &fno) == FR_OK) ? 1 : 0;
 }
 
-static void sort_games(void) {
-    for (int i = 0; i < g_game_count - 1; ++i) {
-        for (int j = 0; j < g_game_count - 1 - i; ++j) {
-            if (strcasecmp(g_games[j].name, g_games[j + 1].name) > 0) {
-                picker_game_t tmp = g_games[j];
-                g_games[j] = g_games[j + 1];
-                g_games[j + 1] = tmp;
-            }
-        }
+/* Read the game's author (if any) from arcade_description.txt and
+ * cache it on the record. Kept short so the sort comparator can
+ * just strcasecmp(a->author, b->author) without re-parsing. */
+static void load_author_into(picker_game_t *g) {
+    g->author[0] = '\0';
+    char path[PICKER_PATH_CAP + 32];
+    if (build_asset_path(path, sizeof(path), g->path, "arcade_description.txt") < 0) {
+        return;
+    }
+    FIL f;
+    if (f_open(&f, path, FA_READ) != FR_OK) return;
+    /* Peek the file into a local scratch; the loader reuses
+     * g_desc_buf at render time, so we mustn't clobber it here. */
+    char buf[DESC_CAP + 1];
+    UINT br = 0;
+    f_read(&f, buf, DESC_CAP, &br);
+    f_close(&f);
+    buf[br] = '\0';
+    char *author = find_author_line(buf);
+    if (author) {
+        size_t n = strlen(author);
+        if (n > MAX_AUTHOR_LEN) n = MAX_AUTHOR_LEN;
+        memcpy(g->author, author, n);
+        g->author[n] = '\0';
     }
 }
 
@@ -205,116 +534,70 @@ static int scan_games(void) {
         memcpy(g->path, "/games/", 7);
         memcpy(g->path + 7, g->name, name_len);
         g->path[7 + name_len] = '\0';
+        g->favourite = false;
+        load_author_into(g);
     }
     f_closedir(&dir);
-    sort_games();
     return 0;
 }
 
-/* --- per-game asset load ------------------------------------------- */
+/* --- sort ordering ---------------------------------------------- */
 
-/* Build "/games/<name>/<file>" into out. Returns 0 on success,
- * -1 if the buffer is too small. */
-static int build_asset_path(char *out, size_t cap,
-                            const char *game_path, const char *leaf) {
-    size_t gp_len   = strlen(game_path);
-    size_t leaf_len = strlen(leaf);
-    /* game_path + '/' + leaf + NUL */
-    if (gp_len + 1 + leaf_len + 1 > cap) return -1;
-    memcpy(out, game_path, gp_len);
-    out[gp_len] = '/';
-    memcpy(out + gp_len + 1, leaf, leaf_len + 1);
-    return 0;
+static int cmp_name(int a, int b) {
+    return strcasecmp(g_games[a].name, g_games[b].name);
 }
 
-/* Load /games/<name>/icon.bmp into g_icon_px. On failure, sets
- * g_icon_w/h to 0 — render_hero draws a placeholder in that case. */
-static void load_icon(const char *game_path) {
-    g_icon_w = 0;
-    g_icon_h = 0;
-    char path[PICKER_PATH_CAP + 16];
-    if (build_asset_path(path, sizeof(path), game_path, "icon.bmp") < 0) return;
-    int w = 0, h = 0;
-    if (thumbyone_picker_bmp_load(path, g_icon_px, ICON_MAX * ICON_MAX, &w, &h) == 0) {
-        g_icon_w = w;
-        g_icon_h = h;
-    }
+static int cmp_fav_then_name(int a, int b) {
+    int fa = g_games[a].favourite ? 0 : 1;
+    int fb = g_games[b].favourite ? 0 : 1;
+    if (fa != fb) return fa - fb;
+    return cmp_name(a, b);
 }
 
-/* Strip trailing whitespace (CR/LF/spaces) in place and return the
- * trimmed length. */
-static size_t rtrim(char *s) {
-    size_t n = strlen(s);
-    while (n > 0) {
-        unsigned char c = (unsigned char)s[n - 1];
-        if (c != ' ' && c != '\t' && c != '\r' && c != '\n') break;
-        s[--n] = '\0';
-    }
-    return n;
+static int cmp_author_then_name(int a, int b) {
+    /* Games with no known author sink to the bottom. */
+    int ea = g_games[a].author[0] ? 0 : 1;
+    int eb = g_games[b].author[0] ? 0 : 1;
+    if (ea != eb) return ea - eb;
+    int c = strcasecmp(g_games[a].author, g_games[b].author);
+    if (c != 0) return c;
+    return cmp_name(a, b);
 }
 
-/* Load /games/<name>/arcade_description.txt into g_desc_buf and
- * split it into g_title + g_body[]. Falls back to the directory
- * leaf when the file is missing / empty. Body lines are collapsed
- * so blank separators don't eat our limited row budget. */
-static void load_description(const picker_game_t *g) {
-    g_title = (char *)g->name;
-    g_body_count = 0;
-
-    char path[PICKER_PATH_CAP + 32];
-    if (build_asset_path(path, sizeof(path), g->path, "arcade_description.txt") < 0) {
-        return;
-    }
-
-    FIL f;
-    if (f_open(&f, path, FA_READ) != FR_OK) return;
-    UINT br = 0;
-    if (f_read(&f, g_desc_buf, DESC_CAP, &br) != FR_OK) {
-        f_close(&f);
-        return;
-    }
-    f_close(&f);
-    g_desc_buf[br] = '\0';
-
-    /* Walk the buffer, splitting on '\n'. Each line gets NUL-
-     * terminated in place. First non-empty line is the title;
-     * remaining non-empty lines are body. */
-    char *title = NULL;
-    char *p = g_desc_buf;
-    while (*p && g_body_count < DESC_MAX_LINES) {
-        char *line = p;
-        while (*p && *p != '\n') ++p;
-        if (*p == '\n') { *p = '\0'; ++p; }
-        rtrim(line);
-        if (*line == '\0') continue;
-        if (!title) {
-            title = line;
-        } else {
-            g_body[g_body_count++] = line;
+/* Rebuild g_order[] according to g_sort. Bubble sort — list is
+ * at most MAX_GAMES (32), readability over speed. */
+static void apply_sort(void) {
+    for (int i = 0; i < g_game_count; ++i) g_order[i] = i;
+    int (*cmp)(int, int) = cmp_name;
+    if (g_sort == SORT_FAV)    cmp = cmp_fav_then_name;
+    if (g_sort == SORT_AUTHOR) cmp = cmp_author_then_name;
+    for (int i = 0; i < g_game_count - 1; ++i) {
+        for (int j = 0; j < g_game_count - 1 - i; ++j) {
+            if (cmp(g_order[j], g_order[j + 1]) > 0) {
+                int tmp = g_order[j];
+                g_order[j] = g_order[j + 1];
+                g_order[j + 1] = tmp;
+            }
         }
     }
-    if (title) g_title = title;
 }
 
-static void load_selection_assets(int sel) {
-    if (sel < 0 || sel >= g_game_count) {
-        g_icon_w = g_icon_h = 0;
-        g_title = NULL;
-        g_body_count = 0;
-        return;
+/* Find the order index for a given real index — after a sort change
+ * we want the cursor to stay on the same game. Returns 0 if missing. */
+static int order_index_for(int real) {
+    for (int i = 0; i < g_game_count; ++i) {
+        if (g_order[i] == real) return i;
     }
-    load_icon(g_games[sel].path);
-    load_description(&g_games[sel]);
+    return 0;
 }
 
-/* --- rendering ----------------------------------------------------- */
+/* --- hero view -------------------------------------------------- */
 
-/* Minimal word-wrap: split `s` into non-overflowing chunks by
- * pushing whole words into `out` up to `max_px`. Each chunk is
- * emitted to a callback so we don't need a temp array of lines.
- * Words longer than max_px are hard-wrapped at the pixel boundary. */
 typedef void (*line_draw_fn)(const char *line, int y, void *user);
 
+/* Word-wrap driver: emits chunks of `s` that each fit within
+ * `max_px`. Breaks on spaces where possible; hard-wraps long
+ * unbroken runs at the pixel limit. */
 static void wrap_draw(const char *s, int max_px, int line_h,
                       int y_start, int max_lines,
                       line_draw_fn draw, void *user) {
@@ -324,8 +607,6 @@ static void wrap_draw(const char *s, int max_px, int line_h,
     const char *cur = s;
 
     while (*cur && lines_drawn < max_lines) {
-        /* Find the longest prefix that fits, preferring a space
-         * break. We never exceed `sizeof(tmp)-1` characters either. */
         int best_break = 0;
         int i = 0;
         int last_space = -1;
@@ -334,19 +615,14 @@ static void wrap_draw(const char *s, int max_px, int line_h,
             tmp[i] = cur[i];
             tmp[i + 1] = '\0';
             if (nes_font_width(tmp) > max_px) {
-                /* Overflowed — back off to the last word boundary. */
-                if (last_space > 0) {
-                    best_break = last_space;
-                } else {
-                    best_break = i;   /* no space: hard-wrap */
-                }
+                best_break = (last_space > 0) ? last_space : i;
                 break;
             }
             ++i;
         }
-        if (cur[i] == '\0') best_break = i;   /* end of string fit */
+        if (cur[i] == '\0') best_break = i;
+        if (best_break == 0) break;   /* defensive — never infinite-loop */
 
-        /* Emit a NUL-terminated slice. */
         char saved = tmp[best_break];
         tmp[best_break] = '\0';
         rtrim(tmp);
@@ -355,7 +631,7 @@ static void wrap_draw(const char *s, int max_px, int line_h,
         ++lines_drawn;
 
         cur += best_break;
-        while (*cur == ' ') ++cur;      /* skip spaces at break  */
+        while (*cur == ' ') ++cur;
     }
 }
 
@@ -364,17 +640,8 @@ static void draw_body_line(const char *line, int y, void *user) {
     nes_font_draw(g_fb, line, 4, y, COL_TEXT);
 }
 
-/* Placeholder for missing icon.bmp — a soft gradient square with the
- * first letter of the name. Keeps the hero layout balanced. */
 static void render_icon_placeholder(int x, int y, int side, char init) {
     fb_rect(x, y, side, side, COL_PANEL);
-    /* Subtle outline. */
-    for (int i = 0; i < side; ++i) {
-        g_fb[y * 128 + (x + i)] = COL_DIM;
-        g_fb[(y + side - 1) * 128 + (x + i)] = COL_DIM;
-        g_fb[(y + i) * 128 + x] = COL_DIM;
-        g_fb[(y + i) * 128 + (x + side - 1)] = COL_DIM;
-    }
     char s[2] = { init ? init : '?', 0 };
     int sw = nes_font_width_2x(s);
     nes_font_draw_2x(g_fb, s, x + (side - sw) / 2, y + (side - 10) / 2, COL_FG);
@@ -406,17 +673,17 @@ static void render_error(const char *line1, const char *line2) {
     present_blocking();
 }
 
+/* Render the hero view for the game at g_order[sel]. */
 static void render_hero(int sel) {
     fb_fill(COL_BG);
 
-    /* Top strip — "MPY" banner left, "N/M" counter right. Format
-     * the counter by hand; MAX_GAMES is 32 so two decimal digits
-     * each are plenty, and GCC's format-truncation analyser won't
-     * let snprintf run with the narrow buffer we'd want. */
+    /* Top strip: "MPY" banner left, pos + favourite-star right. */
     nes_font_draw(g_fb, "MPY", 4, 4, COL_TITLE);
+
+    int real = (g_game_count > 0) ? g_order[sel] : -1;
+
     char pos[12];
-    int cur = sel + 1;
-    int tot = g_game_count;
+    int cur = sel + 1, tot = g_game_count;
     size_t pi = 0;
     if (cur >= 10) pos[pi++] = '0' + (cur / 10);
     pos[pi++] = '0' + (cur % 10);
@@ -426,11 +693,14 @@ static void render_hero(int sel) {
     pos[pi] = '\0';
     int pw = nes_font_width(pos);
     nes_font_draw(g_fb, pos, 128 - pw - 4, 4, COL_ACCENT);
-    /* Thin divider under the top strip. */
-    for (int x = 2; x < 126; ++x) g_fb[14 * 128 + x] = COL_DIM;
 
-    /* 64x64 icon slot centred at (x=32, y=18). Smaller icons
-     * are centred inside that slot so the layout stays stable. */
+    /* Favourite star just left of the position counter. */
+    if (real >= 0 && g_games[real].favourite) {
+        nes_font_draw(g_fb, "*", 128 - pw - 10, 4, COL_ACCENT);
+    }
+
+    fb_hline(2, 14, 124, COL_DIM);
+
     const int slot_x = 32;
     const int slot_y = 18;
     const int slot_s = 64;
@@ -444,61 +714,249 @@ static void render_hero(int sel) {
                                 g_title ? g_title[0] : '?');
     }
 
-    /* Prev / next arrow hints flanking the icon. */
     if (g_game_count > 1) {
         if (sel > 0)                nes_font_draw(g_fb, "<", 2,        slot_y + 28, COL_DIM);
         if (sel < g_game_count - 1) nes_font_draw(g_fb, ">", 128 - 6,  slot_y + 28, COL_DIM);
     }
 
-    /* Title in 2x font below the icon. If it overflows the
-     * screen, truncate with an ellipsis — marquee would be nicer
-     * but adds per-frame state we don't need yet. */
-    const char *title = g_title ? g_title : g_games[sel].name;
+    /* Title below the icon, 2x font, truncated to fit. */
+    const char *title = g_title ? g_title
+                                : (real >= 0 ? g_games[real].name : "");
     char title_buf[40];
     strncpy(title_buf, title, sizeof(title_buf) - 1);
     title_buf[sizeof(title_buf) - 1] = '\0';
-    /* Chop glyphs from the end until we fit 124 px. */
     while (nes_font_width_2x(title_buf) > 124 && strlen(title_buf) > 1) {
         title_buf[strlen(title_buf) - 1] = '\0';
     }
     int tw = nes_font_width_2x(title_buf);
-    int title_y = slot_y + slot_s + 4;    /* = 86 */
-    nes_font_draw_2x(g_fb, title_buf, (128 - tw) / 2, title_y, COL_FG);
+    int title_y = slot_y + slot_s + 4;
+    nes_font_draw_2x(g_fb, title_buf,
+                     (128 - tw) / 2, title_y,
+                     real >= 0 && g_games[real].favourite ? COL_ACCENT : COL_FG);
 
-    /* Blurb: up to 3 lines of the description, wrapped to 120 px.
-     * We concatenate the stored body lines with spaces so the
-     * wrap algorithm sees one flowing paragraph and doesn't waste
-     * rows on short source lines. */
-    int blurb_y = title_y + 12;           /* = 98 */
+    /* Blurb: up to 3 wrapped lines below the title. */
+    int blurb_y = title_y + 12;
     int blurb_max_y = 118;
     int blurb_rows = (blurb_max_y - blurb_y) / 7;
     if (blurb_rows > 3) blurb_rows = 3;
 
     if (g_body_count > 0 && blurb_rows > 0) {
         char blurb[256];
-        size_t pos_blurb = 0;
-        for (int i = 0; i < g_body_count && pos_blurb < sizeof(blurb) - 1; ++i) {
+        size_t bp = 0;
+        for (int i = 0; i < g_body_count && bp < sizeof(blurb) - 1; ++i) {
             const char *l = g_body[i];
             size_t ln = strlen(l);
-            if (pos_blurb > 0 && pos_blurb < sizeof(blurb) - 1) {
-                blurb[pos_blurb++] = ' ';
-            }
-            if (pos_blurb + ln >= sizeof(blurb)) ln = sizeof(blurb) - 1 - pos_blurb;
-            memcpy(blurb + pos_blurb, l, ln);
-            pos_blurb += ln;
+            if (bp > 0 && bp < sizeof(blurb) - 1) blurb[bp++] = ' ';
+            if (bp + ln >= sizeof(blurb)) ln = sizeof(blurb) - 1 - bp;
+            memcpy(blurb + bp, l, ln);
+            bp += ln;
         }
-        blurb[pos_blurb] = '\0';
+        blurb[bp] = '\0';
         wrap_draw(blurb, 120, 7, blurb_y, blurb_rows,
                   draw_body_line, NULL);
     }
 
-    /* Footer — hint strip. */
-    nes_font_draw(g_fb, "A launch  MENU lobby", 4, 121, COL_DIM);
+    nes_font_draw(g_fb, "A launch  MENU menu", 6, 121, COL_DIM);
 
     present_blocking();
 }
 
-/* --- selection write ----------------------------------------------- */
+/* --- menu overlay ------------------------------------------------ */
+
+/* Compute free / total KB on the shared FAT. Best-effort — on
+ * error, returns zeroes and the row renders as "?". */
+static void disk_stats_kb(uint32_t *free_kb, uint32_t *total_kb) {
+    *free_kb = 0;
+    *total_kb = 0;
+    FATFS *fs = NULL;
+    DWORD free_clust = 0;
+    if (f_getfree("/", &free_clust, &fs) != FR_OK || !fs) return;
+    /* FatFs R0.15: total sectors = (n_fatent - 2) * csize, and
+     * free = free_clust * csize. Sector size = 512 for all FAT
+     * volumes formatted by the lobby. */
+    uint32_t csize = fs->csize;
+    uint32_t total_sectors = (fs->n_fatent - 2) * csize;
+    uint32_t free_sectors  = free_clust * csize;
+    *total_kb = (uint32_t)((uint64_t)total_sectors * 512 / 1024);
+    *free_kb  = (uint32_t)((uint64_t)free_sectors  * 512 / 1024);
+}
+
+/* Format a KB count as "X.YMB" if >= 1024 else "XKB". Writes to
+ * a caller buffer (>= 10 chars). */
+static void fmt_kb(char *out, size_t cap, uint32_t kb) {
+    if (cap < 8) { if (cap) *out = '\0'; return; }
+    if (kb >= 1024) {
+        /* One decimal place: KB/100 gives tenths of MB. */
+        uint32_t whole = kb / 1024;
+        uint32_t tenths = (kb % 1024) * 10 / 1024;
+        char b1[8], b2[4];
+        int_to_str((int)whole, b1);
+        int_to_str((int)tenths, b2);
+        size_t n = strlen(b1);
+        if (n + 1 + strlen(b2) + 2 + 1 > cap) return;
+        memcpy(out, b1, n);
+        out[n++] = '.';
+        memcpy(out + n, b2, strlen(b2));
+        n += strlen(b2);
+        memcpy(out + n, "MB", 3);   /* includes NUL */
+    } else {
+        char b1[8];
+        int_to_str((int)kb, b1);
+        size_t n = strlen(b1);
+        if (n + 3 > cap) return;
+        memcpy(out, b1, n);
+        memcpy(out + n, "KB", 3);
+    }
+}
+
+static void draw_info_row(const char *label, const char *value,
+                          int y, uint16_t val_col) {
+    nes_font_draw(g_fb, label, 4, y, COL_DIM);
+    int vw = nes_font_width(value);
+    nes_font_draw(g_fb, value, 124 - vw, y, val_col);
+}
+
+static void render_menu(int sel) {
+    /* Start from the hero view so the menu overlays the selected
+     * game's context. */
+    render_hero(sel);
+
+    /* Dim the underlying frame with a dark blue panel covering the
+     * bulk of the screen — leaves the top-right "N/M" counter and
+     * the bottom hint strip visible so the user still has context. */
+    fb_rect(4, 16, 120, 100, COL_PANEL);
+
+    /* Title. */
+    int tw = nes_font_width_2x("MENU");
+    nes_font_draw_2x(g_fb, "MENU", (128 - tw) / 2, 18, COL_FG);
+    fb_hline(8, 32, 112, COL_DIM);
+
+    /* Info rows — battery / disk / firmware. */
+    int y = 36;
+    {
+        int pct = battery_percent();
+        float v = battery_voltage();
+        bool chg = battery_charging();
+        char val[16];
+        /* e.g. "88% 4.01V" or "CHRG 4.01V". */
+        int vmv = (int)(v * 100.0f + 0.5f);
+        int vwhole = vmv / 100;
+        int vhundredths = vmv % 100;
+        char vbuf[10];
+        char pbuf[6];
+        int_to_str(vwhole, vbuf);
+        size_t vl = strlen(vbuf);
+        vbuf[vl++] = '.';
+        if (vhundredths < 10) vbuf[vl++] = '0';
+        int_to_str(vhundredths, vbuf + vl);
+        vl = strlen(vbuf);
+        vbuf[vl++] = 'V';
+        vbuf[vl] = '\0';
+
+        size_t k = 0;
+        if (chg) {
+            memcpy(val, "CHRG ", 5); k = 5;
+        } else {
+            int_to_str(pct, pbuf);
+            size_t pl = strlen(pbuf);
+            memcpy(val, pbuf, pl); k = pl;
+            val[k++] = '%'; val[k++] = ' ';
+        }
+        size_t vbl = strlen(vbuf);
+        if (k + vbl + 1 > sizeof(val)) vbl = sizeof(val) - k - 1;
+        memcpy(val + k, vbuf, vbl);
+        val[k + vbl] = '\0';
+        uint16_t col = chg ? COL_GOOD : (pct < 15 ? COL_ERR : COL_TEXT);
+        draw_info_row("batt", val, y, col);
+    }
+    y += 9;
+    {
+        uint32_t fk = 0, tk = 0;
+        disk_stats_kb(&fk, &tk);
+        char fv[10], tv[10];
+        fmt_kb(fv, sizeof(fv), fk);
+        fmt_kb(tv, sizeof(tv), tk);
+        char row[24];
+        size_t n = strlen(fv);
+        if (n + 1 + strlen(tv) + 1 > sizeof(row)) n = 0;
+        memcpy(row, fv, n);
+        row[n++] = '/';
+        size_t tl = strlen(tv);
+        if (n + tl >= sizeof(row)) tl = sizeof(row) - n - 1;
+        memcpy(row + n, tv, tl);
+        row[n + tl] = '\0';
+        draw_info_row("free", row, y, COL_TEXT);
+    }
+    y += 9;
+    {
+        const char *author = g_author ? g_author : "-";
+        /* Truncate if the author string doesn't fit. */
+        char tmp[24];
+        strncpy(tmp, author, sizeof(tmp) - 1);
+        tmp[sizeof(tmp) - 1] = '\0';
+        while (nes_font_width(tmp) > 88 && strlen(tmp) > 1) {
+            tmp[strlen(tmp) - 1] = '\0';
+        }
+        draw_info_row("by", tmp, y, COL_TEXT);
+    }
+    y += 9;
+    {
+        draw_info_row("fw", "MPY " THUMBYONE_FW_VERSION, y, COL_TEXT);
+    }
+    y += 11;   /* extra gap before the interactive items */
+
+    fb_hline(8, y, 112, COL_DIM);
+    y += 4;
+
+    /* Interactive items. */
+    int item_y[MI_COUNT];
+    const char *labels[MI_COUNT] = {
+        "Favourite",
+        "Sort",
+        "Back to lobby",
+        "Close",
+    };
+    int real = g_order[sel];
+    const char *values[MI_COUNT] = {
+        g_games[real].favourite ? "*" : "-",
+        sort_label[g_sort],
+        "",
+        "",
+    };
+
+    for (int i = 0; i < MI_COUNT; ++i) {
+        item_y[i] = y;
+        if (i == g_menu_cursor) {
+            fb_rect(6, y - 1, 116, 9, COL_PANEL_HL);
+        }
+        uint16_t lbl_col = (i == g_menu_cursor) ? COL_FG : COL_TEXT;
+        uint16_t val_col = (i == g_menu_cursor) ? COL_ACCENT : COL_TEXT;
+        nes_font_draw(g_fb, labels[i], 10, y, lbl_col);
+        if (values[i][0]) {
+            int vw = nes_font_width(values[i]);
+            nes_font_draw(g_fb, values[i], 120 - vw, y, val_col);
+        }
+        y += 9;
+    }
+    (void)item_y;
+
+    /* Footer hint. */
+    nes_font_draw(g_fb, "A: select  MENU: close", 4, 121, COL_DIM);
+
+    present_blocking();
+}
+
+static void toggle_favourite(int sel) {
+    int real = g_order[sel];
+    g_games[real].favourite = !g_games[real].favourite;
+    g_favs_dirty = true;
+}
+
+static void cycle_sort(void) {
+    g_sort = (sort_mode_t)((g_sort + 1) % SORT_COUNT);
+}
+
+/* --- selection write --------------------------------------------- */
 
 static int write_active_game(const char *path) {
     FIL f;
@@ -510,17 +968,7 @@ static int write_active_game(const char *path) {
     return (r == FR_OK && written == strlen(path)) ? 0 : -1;
 }
 
-/* --- main loop ----------------------------------------------------- */
-
-static bool menu_hold_for_lobby(void) {
-    const int HOLD_MS = 800;
-    absolute_time_t deadline = make_timeout_time_ms(HOLD_MS);
-    while (btn(PIN_MENU)) {
-        if (time_reached(deadline)) return true;
-        sleep_ms(10);
-    }
-    return false;
-}
+/* --- main loop --------------------------------------------------- */
 
 int thumbyone_picker_run(void) {
     set_sys_clock_khz(250000, true);
@@ -535,32 +983,45 @@ int thumbyone_picker_run(void) {
     if (r != FR_OK) {
         render_error("mount failed", "go to lobby, wipe");
         while (1) {
-            if (btn(PIN_MENU) && menu_hold_for_lobby()) {
-                thumbyone_handoff_request_lobby();
-            }
             sleep_ms(20);
+            if (btn(PIN_MENU)) {
+                /* In the error path, MENU-hold routes to lobby
+                 * without the overlay — nothing else would work. */
+                absolute_time_t d = make_timeout_time_ms(800);
+                bool held = false;
+                while (btn(PIN_MENU)) {
+                    if (time_reached(d)) { held = true; break; }
+                    sleep_ms(10);
+                }
+                if (held) thumbyone_handoff_request_lobby();
+            }
         }
     }
 
     if (scan_games() < 0) {
         render_error("scan failed", "corrupt /games/?");
-        while (1) {
-            if (btn(PIN_MENU) && menu_hold_for_lobby()) {
-                thumbyone_handoff_request_lobby();
-            }
-            sleep_ms(20);
-        }
+        while (1) { sleep_ms(20); }
     }
 
     if (g_game_count == 0) {
         render_empty();
         while (1) {
-            if (btn(PIN_MENU) && menu_hold_for_lobby()) {
-                thumbyone_handoff_request_lobby();
-            }
             sleep_ms(20);
+            if (btn(PIN_MENU)) {
+                absolute_time_t d = make_timeout_time_ms(800);
+                bool held = false;
+                while (btn(PIN_MENU)) {
+                    if (time_reached(d)) { held = true; break; }
+                    sleep_ms(10);
+                }
+                if (held) thumbyone_handoff_request_lobby();
+            }
         }
     }
+
+    favs_load_all();
+    sort_mode_load();
+    apply_sort();
 
     int sel = 0;
     load_selection_assets(sel);
@@ -573,45 +1034,101 @@ int thumbyone_picker_run(void) {
     while (1) {
         bool dirty = false;
 
-        /* Up/down AND left/right all step through games — either
-         * D-pad axis feels natural on a hero view. */
-        if (just_pressed(PIN_UP, &prev_up) ||
-            just_pressed(PIN_LEFT, &prev_left)) {
-            sel = (sel > 0) ? sel - 1 : g_game_count - 1;
-            dirty = true;
-        }
-        if (just_pressed(PIN_DOWN, &prev_down) ||
-            just_pressed(PIN_RIGHT, &prev_right)) {
-            sel = (sel + 1) % g_game_count;
-            dirty = true;
-        }
-
-        if (just_pressed(PIN_A, &prev_a)) {
-            const char *chosen = g_games[sel].path;
-            if (write_active_game(chosen) < 0) {
-                render_error("write failed", "flash locked?");
-                sleep_ms(2000);
-                render_hero(sel);
-                continue;
+        if (g_menu_open) {
+            /* --- menu input --- */
+            if (just_pressed(PIN_UP, &prev_up) ||
+                just_pressed(PIN_LEFT, &prev_left)) {
+                g_menu_cursor = (g_menu_cursor + MI_COUNT - 1) % MI_COUNT;
+                dirty = true;
             }
-            f_unmount("");
-            nes_lcd_wait_idle();
-            nes_lcd_teardown();
-            return 0;
-        }
+            if (just_pressed(PIN_DOWN, &prev_down) ||
+                just_pressed(PIN_RIGHT, &prev_right)) {
+                g_menu_cursor = (g_menu_cursor + 1) % MI_COUNT;
+                dirty = true;
+            }
+            if (just_pressed(PIN_A, &prev_a)) {
+                switch ((menu_item_t)g_menu_cursor) {
+                case MI_FAVOURITE:
+                    toggle_favourite(sel);
+                    dirty = true;
+                    break;
+                case MI_SORT: {
+                    int real = g_order[sel];
+                    cycle_sort();
+                    apply_sort();
+                    sel = order_index_for(real);
+                    dirty = true;
+                    break;
+                }
+                case MI_LOBBY:
+                    g_menu_lobby_requested = true;
+                    break;
+                case MI_CLOSE:
+                    g_menu_open = false;
+                    load_selection_assets(sel);
+                    render_hero(sel);
+                    break;
+                case MI_COUNT: break;
+                }
+            }
+            if (just_pressed(PIN_MENU, &prev_menu)) {
+                g_menu_open = false;
+                load_selection_assets(sel);
+                render_hero(sel);
+            }
 
-        if (just_pressed(PIN_MENU, &prev_menu)) {
-            if (menu_hold_for_lobby()) {
+            if (g_menu_lobby_requested) {
+                favs_save();
+                sort_mode_save();
                 f_unmount("");
                 nes_lcd_wait_idle();
                 thumbyone_handoff_request_lobby();
+                /* does not return */
+            }
+
+            if (dirty) render_menu(sel);
+        } else {
+            /* --- hero input --- */
+            if (just_pressed(PIN_UP, &prev_up) ||
+                just_pressed(PIN_LEFT, &prev_left)) {
+                sel = (sel > 0) ? sel - 1 : g_game_count - 1;
+                dirty = true;
+            }
+            if (just_pressed(PIN_DOWN, &prev_down) ||
+                just_pressed(PIN_RIGHT, &prev_right)) {
+                sel = (sel + 1) % g_game_count;
+                dirty = true;
+            }
+
+            if (just_pressed(PIN_A, &prev_a)) {
+                int real = g_order[sel];
+                const char *chosen = g_games[real].path;
+                if (write_active_game(chosen) < 0) {
+                    render_error("write failed", "flash locked?");
+                    sleep_ms(2000);
+                    render_hero(sel);
+                    continue;
+                }
+                favs_save();
+                sort_mode_save();
+                f_unmount("");
+                nes_lcd_wait_idle();
+                nes_lcd_teardown();
+                return 0;
+            }
+
+            if (just_pressed(PIN_MENU, &prev_menu)) {
+                g_menu_open = true;
+                g_menu_cursor = 0;
+                render_menu(sel);
+            }
+
+            if (dirty) {
+                load_selection_assets(sel);
+                render_hero(sel);
             }
         }
 
-        if (dirty) {
-            load_selection_assets(sel);
-            render_hero(sel);
-        }
         sleep_ms(20);
     }
 }

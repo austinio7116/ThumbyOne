@@ -28,6 +28,8 @@
 
 #include "lcd_gc9107.h"
 #include "font.h"
+#include "lobby_usb.h"
+#include "pico/time.h"
 
 #define PIN_BL        7
 #define PIN_BTN_LB    6
@@ -198,6 +200,43 @@ static bool confirm_erase_chord(void) {
 }
 
 
+#define COL_USB    0x07E0   /* green */
+#define COL_USB_ON 0xFFE0   /* yellow — flashes during transfers */
+
+/* Tracks what the USB row last displayed so we only redraw when
+ * the state actually changes — redrawing 128x128 at 60 Hz just to
+ * animate an indicator is pointless. */
+typedef enum {
+    USB_ROW_NONE = 0,    /* unplugged */
+    USB_ROW_READY,       /* host has mounted the drive */
+    USB_ROW_ACTIVE,      /* transfer in the last ~400 ms */
+} usb_row_state_t;
+
+static usb_row_state_t g_usb_row_state = USB_ROW_NONE;
+
+static void draw_usb_row(usb_row_state_t st) {
+    /* Clear the two-row strip (y=108..126). */
+    for (int y = 108; y < 128; ++y)
+        for (int x = 0; x < 128; ++x)
+            g_fb[y * 128 + x] = COL_BG;
+    switch (st) {
+    case USB_ROW_NONE:
+        nes_font_draw(g_fb, "hold MENU at boot:", 4, 110, COL_ACTION);
+        nes_font_draw(g_fb, "force lobby recovery",4, 120, COL_ACTION);
+        break;
+    case USB_ROW_READY:
+        nes_font_draw(g_fb, "USB connected", 18, 110, COL_USB);
+        nes_font_draw(g_fb, "drop files on drive", 4, 120, COL_USB);
+        break;
+    case USB_ROW_ACTIVE:
+        nes_font_draw(g_fb, "USB transfer...", 14, 110, COL_USB_ON);
+        nes_font_draw(g_fb, "do not unplug",   20, 120, COL_USB_ON);
+        break;
+    }
+    nes_lcd_present(g_fb);
+    nes_lcd_wait_idle();
+}
+
 static void render_home(void) {
     for (int i = 0; i < 128 * 128; ++i) g_fb[i] = COL_BG;
 
@@ -215,11 +254,19 @@ static void render_home(void) {
     nes_font_draw(g_fb, "RB:  launch MPY",  2, 88, COL_TEXT);
     nes_font_draw(g_fb, "MENU: reboot",     2, 98, COL_TEXT);
 
-    nes_font_draw(g_fb, "hold MENU at boot:", 4, 110, COL_ACTION);
-    nes_font_draw(g_fb, "force lobby recovery",4, 120, COL_ACTION);
+    /* The bottom strip gets managed by draw_usb_row so initial state
+     * shows the "hold MENU at boot" hint until a host mounts. */
+    g_usb_row_state = USB_ROW_NONE;
+    draw_usb_row(g_usb_row_state);
+}
 
-    nes_lcd_present(g_fb);
-    nes_lcd_wait_idle();
+/* Compute which state the USB row should be in right now. */
+static usb_row_state_t usb_current_row_state(void) {
+    if (!lobby_usb_mounted()) return USB_ROW_NONE;
+    uint64_t last = lobby_usb_last_op_us();
+    if (last == 0) return USB_ROW_READY;
+    uint64_t delta = (uint64_t)time_us_64() - last;
+    return (delta < 400000) ? USB_ROW_ACTIVE : USB_ROW_READY;
 }
 
 int main(void) {
@@ -297,44 +344,82 @@ int main(void) {
         }
     }
 
+    /* Bring up USB MSC — single place in the firmware that exposes
+     * the shared FAT to a host. Slots never enumerate USB, so this
+     * is the one-and-only drive Windows/macOS/Linux ever sees from
+     * this device. */
+    lobby_usb_init();
+
     render_home();
 
+    /* Slot-launch intent: set by a button press, consumed after the
+     * button is released AND USB has been quiet for a moment. This
+     * avoids yanking a slot out mid-transfer when the user fumbles
+     * the D-pad while Windows is still copying a file. */
+    int pending_slot = -1;   /* -1 = none */
+    uint64_t pending_since_us = 0;
+
+    /* Small helper to pump USB + refresh the bottom UI row. Called
+     * from the tight button-wait loops too so we never stall USB. */
+    absolute_time_t next_row_check = make_timeout_time_ms(0);
+    #define USB_PUMP() do {                                              \
+        lobby_usb_task();                                                \
+        if (absolute_time_diff_us(get_absolute_time(), next_row_check)   \
+                <= 0) {                                                  \
+            usb_row_state_t st = usb_current_row_state();                \
+            if (st != g_usb_row_state) {                                 \
+                g_usb_row_state = st;                                    \
+                draw_usb_row(st);                                        \
+            }                                                            \
+            next_row_check = make_timeout_time_ms(100);                  \
+        }                                                                \
+    } while (0)
+
     while (1) {
-        if (btn_a_pressed()) {
-            while (btn_a_pressed()) sleep_ms(10);
-            sleep_ms(50);
-            nes_lcd_wait_idle();
-            thumbyone_handoff_request_slot(THUMBYONE_SLOT_NES);
-            /* does not return */
+        USB_PUMP();
+
+        /* Debounce: record intent on press, but defer the actual
+         * handoff until the button is released AND no MSC activity
+         * has happened in the last 500 ms. */
+        if (pending_slot < 0) {
+            if (btn_a_pressed())       pending_slot = THUMBYONE_SLOT_NES;
+            else if (btn_b_pressed())  pending_slot = THUMBYONE_SLOT_P8;
+            else if (btn_lb_pressed()) pending_slot = THUMBYONE_SLOT_DOOM;
+            else if (btn_rb_pressed()) pending_slot = THUMBYONE_SLOT_MPY;
+            else if (btn_menu_pressed()) pending_slot = -2;   /* reboot lobby */
+            if (pending_slot != -1) {
+                pending_since_us = (uint64_t)time_us_64();
+            }
         }
-        if (btn_b_pressed()) {
-            while (btn_b_pressed()) sleep_ms(10);
-            sleep_ms(50);
-            nes_lcd_wait_idle();
-            thumbyone_handoff_request_slot(THUMBYONE_SLOT_P8);
-            /* does not return */
+
+        if (pending_slot != -1) {
+            /* Wait for release. Pump USB while we wait. */
+            bool still_held =
+                (pending_slot == THUMBYONE_SLOT_NES  && btn_a_pressed())  ||
+                (pending_slot == THUMBYONE_SLOT_P8   && btn_b_pressed())  ||
+                (pending_slot == THUMBYONE_SLOT_DOOM && btn_lb_pressed()) ||
+                (pending_slot == THUMBYONE_SLOT_MPY  && btn_rb_pressed()) ||
+                (pending_slot == -2                  && btn_menu_pressed());
+            if (!still_held) {
+                /* Wait for USB to go quiet (500 ms since last op) so
+                 * any in-flight host write has completed before we
+                 * hand the FAT to a slot. */
+                uint64_t last = lobby_usb_last_op_us();
+                uint64_t now  = (uint64_t)time_us_64();
+                bool quiet = (last == 0) || ((now - last) > 500000);
+                /* Also require at least 50 ms since the press itself
+                 * to debounce finger-bounce. */
+                bool stable = (now - pending_since_us) > 50000;
+                if (quiet && stable) {
+                    nes_lcd_wait_idle();
+                    if (pending_slot == -2) thumbyone_handoff_request_lobby();
+                    else thumbyone_handoff_request_slot(pending_slot);
+                    /* does not return */
+                }
+            }
         }
-        if (btn_lb_pressed()) {
-            while (btn_lb_pressed()) sleep_ms(10);
-            sleep_ms(50);
-            nes_lcd_wait_idle();
-            thumbyone_handoff_request_slot(THUMBYONE_SLOT_DOOM);
-            /* does not return */
-        }
-        if (btn_rb_pressed()) {
-            while (btn_rb_pressed()) sleep_ms(10);
-            sleep_ms(50);
-            nes_lcd_wait_idle();
-            thumbyone_handoff_request_slot(THUMBYONE_SLOT_MPY);
-            /* does not return */
-        }
-        if (btn_menu_pressed()) {
-            while (btn_menu_pressed()) sleep_ms(10);
-            sleep_ms(50);
-            nes_lcd_wait_idle();
-            thumbyone_handoff_request_lobby();
-            /* does not return */
-        }
-        sleep_ms(20);
+
+        sleep_ms(5);   /* shorter than before — keeps USB responsive */
     }
+    #undef USB_PUMP
 }
