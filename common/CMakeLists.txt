@@ -21,6 +21,11 @@
 #                                Paired with THUMBYONE_COMMON_FS_SRC.
 #   THUMBYONE_FATFS_INCLUDE   — include path for ff.h / diskio.h /
 #                                ffconf.h.
+#   THUMBYONE_PICKER_SRC      — LCD + font + picker UI, shared between
+#                                the lobby and the MPY-slot C picker.
+#                                LCD is the GC9107 via SPI+DMA; font
+#                                is a bitmapped 6x8 with 2x variant.
+#   THUMBYONE_PICKER_INCLUDE  — include path for lcd_gc9107.h + font.h.
 #   THUMBYONE_PT_JSON         — canonical partition-table JSON path.
 #
 # No CMake library wrapping: every target already links pico_stdlib
@@ -59,6 +64,29 @@ set(THUMBYONE_FATFS_SRC
 set(THUMBYONE_FATFS_INCLUDE
     ${CMAKE_CURRENT_SOURCE_DIR}/lib/fatfs
     ${CMAKE_CURRENT_SOURCE_DIR}/fs
+    PARENT_SCOPE)
+
+# LCD (GC9107) + bitmap font. Shared between the ThumbyOne lobby
+# and the MPY slot's C picker (both need a selector UI before any
+# Python runtime exists). Consumers also need hardware_spi +
+# hardware_dma + hardware_gpio linked in, same as the lobby has.
+set(THUMBYONE_PICKER_UI_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/picker/lcd_gc9107.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/picker/font.c
+    PARENT_SCOPE)
+
+# The MPY-slot picker itself — adds picker.c on top of the UI bits.
+# MPY slot wants THUMBYONE_PICKER_SRC, which is PICKER_UI_SRC + picker.c.
+# The lobby uses PICKER_UI_SRC only (draws its own home screen).
+set(THUMBYONE_PICKER_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/picker/lcd_gc9107.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/picker/font.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/picker/picker_bmp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/picker/picker.c
+    PARENT_SCOPE)
+
+set(THUMBYONE_PICKER_INCLUDE
+    ${CMAKE_CURRENT_SOURCE_DIR}/picker
     PARENT_SCOPE)
 
 set(THUMBYONE_PT_JSON

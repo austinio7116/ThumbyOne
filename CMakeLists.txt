@@ -53,14 +53,14 @@ add_subdirectory(common)
 # embedded.
 add_executable(lobby
     lobby/lobby_main.c
-    lobby/lcd_gc9107.c
-    lobby/font.c
+    ${THUMBYONE_PICKER_UI_SRC}
     ${THUMBYONE_COMMON_SRC}
     ${THUMBYONE_COMMON_FS_SRC}
     ${THUMBYONE_FATFS_SRC}
 )
 target_include_directories(lobby PRIVATE
     lobby
+    ${THUMBYONE_PICKER_INCLUDE}
     ${THUMBYONE_COMMON_INCLUDE}
     ${THUMBYONE_FATFS_INCLUDE}
 )
@@ -193,6 +193,11 @@ if (THUMBYONE_WITH_MPY)
         ${THUMBYONE_MPTHUMBY_DIR}/TinyCircuits-Tiny-Game-Engine/src/micropython.cmake)
 
     # Build mp-thumby via its own cmake, isolated from ours.
+    # THUMBYONE_ROOT lets mp-thumby's port CMakeLists assemble source
+    # paths (picker, common/fs, lib/fatfs) itself — passing multi-
+    # element CMake lists across ExternalProject_Add is awkward
+    # because of semicolon mangling, so we hand over the tree root
+    # and let the consumer figure out the rest.
     ExternalProject_Add(mpy_slot
         SOURCE_DIR     ${MPY_SRC_DIR}
         BINARY_DIR     ${MPY_BUILD_DIR}
@@ -201,8 +206,7 @@ if (THUMBYONE_WITH_MPY)
             -DPICO_SDK_PATH_OVERRIDE=${PICO_SDK_PATH}
             -DUSER_C_MODULES=${MPY_USER_C_MODULES}
             -DTHUMBYONE_SLOT_MODE=mpy
-            -DTHUMBYONE_COMMON_SRC=${THUMBYONE_COMMON_SRC}
-            -DTHUMBYONE_COMMON_INCLUDE=${THUMBYONE_COMMON_INCLUDE}
+            -DTHUMBYONE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
         BUILD_BYPRODUCTS ${MPY_UF2}
         INSTALL_COMMAND ""
