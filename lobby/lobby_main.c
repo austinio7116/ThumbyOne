@@ -213,9 +213,13 @@ static bool confirm_erase_chord(void) {
 }
 
 
-#define COL_USB_OFF  0xFFFF  /* white — idle (matches rest-of-firmware default) */
-#define COL_USB_ON   0x07FF  /* cyan — host mounted (matches engine's charge colour) */
-#define COL_USB_BUSY 0xFD20  /* amber — transferring */
+/* On-screen USB dot colours — matched to the physical LED primaries
+ * that actually work on the hardware: idle=green, mounted=blue,
+ * transferring=red. Using the same hues on screen + LED means the
+ * tiny dot and the physical LED always tell the same story. */
+#define COL_USB_OFF  0x07E0  /* green — idle */
+#define COL_USB_ON   0x001F  /* blue  — host mounted */
+#define COL_USB_BUSY 0xF800  /* red   — transferring */
 
 /* --- physical RGB LED --------------------------------------------- *
  * The Thumby Color's status LED is a common-anode RGB tri-LED driven
@@ -238,19 +242,19 @@ static void led_set_rgb(int r, int g, int b) {
 }
 
 static void led_set_off(void)    { led_set_rgb(0, 0, 0); }
-/* DIAGNOSTIC: each state forces a single primary so we can tell
- * which GPIO channel is actually driving the LED on THIS device.
- * Previous 'white = pure green' + 'mounted = cyan' + 'xfer = amber'
- * was still reading as red/pink on-hardware, which suggests the
- * green channel isn't firing. Flash this and tell me:
- *    idle (no USB)  should be  PURE GREEN     (pin 10 / PWM5 A)
- *    mounted        should be  PURE BLUE      (pin 12 / PWM6 A)
- *    transferring   should be  PURE RED       (pin 11 / PWM5 B)
- * Whichever colour ACTUALLY appears tells us which physical LED
- * GPIO 10, 11, 12 each drive on your hardware. */
-static void led_set_white(void)  { led_set_rgb(0, 255, 0); }    /* green test */
-static void led_set_green(void)  { led_set_rgb(0, 0, 255); }    /* blue test  */
-static void led_set_yellow(void) { led_set_rgb(255, 0, 0); }    /* red test   */
+/* Pin-mapping confirmed on-hardware: GPIO 10 = green, 12 = blue,
+ * 11 = red. Pure-primary drive works fine per channel; the previous
+ * 'white' + 'cyan' + 'amber' mixes failed because the green die on
+ * this LED is much dimmer than R/B at equal PWM drive — mixes with
+ * moderate green never showed any green contribution.
+ *
+ * Instead of chasing a perceptual-white mix, commit to pure-primary
+ * signalling: each USB state is a single dominant colour, matching
+ * the on-screen USB dot. Reads immediately, works around the dim
+ * green channel, and keeps LED + screen tied together. */
+static void led_set_white(void)  { led_set_rgb(0, 255, 0); }   /* idle — green */
+static void led_set_green(void)  { led_set_rgb(0, 0, 255); }   /* mounted — blue */
+static void led_set_yellow(void) { led_set_rgb(255, 0, 0); }   /* xfer — red */
 
 /* Per-pin PWM init — matches the engine's engine_io_rp3_pwm_setup()
  * pattern exactly. Calling pwm_init once per pin (rather than once
@@ -395,9 +399,9 @@ static int first_enabled_slot(void) {
 }
 
 #define GRID_TILE_SIZE  48
-#define GRID_ORIGIN_X   12
-#define GRID_ORIGIN_Y   12
-#define GRID_GUTTER      8
+#define GRID_ORIGIN_X   13
+#define GRID_ORIGIN_Y   13
+#define GRID_GUTTER      6
 
 /* Start the cursor on the first enabled slot so the initial render
  * doesn't highlight a greyed-out tile. If all slots are disabled,
@@ -489,11 +493,13 @@ static void draw_selection_corners(int x, int y) {
 static void render_home(void) {
     for (int i = 0; i < 128 * 128; ++i) g_fb[i] = COL_BG;
 
-    /* Header bar: navy background, cyan title, cyan underline. */
-    for (int y = 0; y < 11; ++y)
+    /* Header bar: navy background (y=0..9, 10px), cyan underline at
+     * y=10. Grid content starts at y=12 so the selected-tile corner
+     * brackets at y=12 don't get covered by the bar. */
+    for (int y = 0; y < 10; ++y)
         for (int x = 0; x < 128; ++x)
             g_fb[y * 128 + x] = COL_BAR_BG;
-    for (int x = 0; x < 128; ++x) g_fb[11 * 128 + x] = COL_BAR_LINE;
+    for (int x = 0; x < 128; ++x) g_fb[10 * 128 + x] = COL_BAR_LINE;
     nes_font_draw(g_fb, "ThumbyOne", 2, 2, COL_BAR_FG);
 
     /* Grid tiles. Each tile is drawn at full brightness first, then
@@ -517,18 +523,19 @@ static void render_home(void) {
         }
     }
 
-    /* Footer bar: navy background, cyan underline, system name in
-     * cyan centred on the navy. */
-    for (int y = 117; y < 128; ++y)
+    /* Footer bar: navy background (y=119..127, 9px), cyan underline
+     * at y=118. Grid content ends at y=117 so the selected-tile
+     * corner brackets at y=115 don't get covered. */
+    for (int y = 119; y < 128; ++y)
         for (int x = 0; x < 128; ++x)
             g_fb[y * 128 + x] = COL_BAR_BG;
-    for (int x = 0; x < 128; ++x) g_fb[116 * 128 + x] = COL_BAR_LINE;
+    for (int x = 0; x < 128; ++x) g_fb[118 * 128 + x] = COL_BAR_LINE;
     {
         const char *label = g_grid_labels[g_grid_cursor];
         uint16_t col = g_grid_slot_present[g_grid_cursor]
                          ? COL_BAR_FG : COL_USB_OFF;   /* dim for disabled */
         int lw = nes_font_width(label);
-        nes_font_draw(g_fb, label, (128 - lw) / 2, 120, col);
+        nes_font_draw(g_fb, label, (128 - lw) / 2, 121, col);
     }
 
     /* Paint the USB indicator into the top-right strip using the
