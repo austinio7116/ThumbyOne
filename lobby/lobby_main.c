@@ -29,9 +29,14 @@
 #include "lcd_gc9107.h"
 #include "font.h"
 #include "lobby_usb.h"
+#include "lobby_icons.h"
 #include "pico/time.h"
 
 #define PIN_BL        7
+#define PIN_BTN_LEFT  0
+#define PIN_BTN_UP    1
+#define PIN_BTN_RIGHT 2
+#define PIN_BTN_DOWN  3
 #define PIN_BTN_LB    6
 #define PIN_BTN_A    21
 #define PIN_BTN_RB   22
@@ -58,6 +63,10 @@ static bool btn_b_pressed(void)    { return !gpio_get(PIN_BTN_B); }
 static bool btn_lb_pressed(void)   { return !gpio_get(PIN_BTN_LB); }
 static bool btn_rb_pressed(void)   { return !gpio_get(PIN_BTN_RB); }
 static bool btn_menu_pressed(void) { return !gpio_get(PIN_BTN_MENU); }
+static bool btn_up_pressed(void)    { return !gpio_get(PIN_BTN_UP); }
+static bool btn_down_pressed(void)  { return !gpio_get(PIN_BTN_DOWN); }
+static bool btn_left_pressed(void)  { return !gpio_get(PIN_BTN_LEFT); }
+static bool btn_right_pressed(void) { return !gpio_get(PIN_BTN_RIGHT); }
 
 /* --- shared-FAT erase (LB+RB held at boot) -------------------------- */
 /*
@@ -237,27 +246,161 @@ static void draw_usb_row(usb_row_state_t st) {
     nes_lcd_wait_idle();
 }
 
+/* --- system selector grid ---------------------------------------- *
+ *
+ * 2x2 grid of 48x48 system icons centred horizontally. Grid area
+ * runs y=12..108, leaving the top 12 px for an optional title strip
+ * and the bottom 20 px for the USB-state hint row. Icons are at:
+ *
+ *    (12, 12)   (68, 12)   — NES, P8
+ *    (12, 68)   (68, 68)   — DOOM, MPY
+ *
+ * Selected tile gets a 2 px yellow border + the slot label drawn
+ * below the grid in dim grey. D-pad moves, A launches.
+ */
+
+/* Slot order in the grid must match the lobby_icons[] indexing
+ * emitted by pack_icons.py (NES, P8, DOOM, MPY). */
+static const thumbyone_slot_t g_grid_slot_order[4] = {
+    THUMBYONE_SLOT_NES,
+    THUMBYONE_SLOT_P8,
+    THUMBYONE_SLOT_DOOM,
+    THUMBYONE_SLOT_MPY,
+};
+
+/* Per-slot "is this slot actually compiled into this build" flags,
+ * fed from the top-level CMake. Disabled tiles are drawn greyed
+ * out and skipped over during D-pad navigation. Defaults to 1 so
+ * an in-tree experiment that doesn't pass the definitions still
+ * behaves like the full build. */
+#ifndef THUMBYONE_LOBBY_HAS_NES
+#define THUMBYONE_LOBBY_HAS_NES 1
+#endif
+#ifndef THUMBYONE_LOBBY_HAS_P8
+#define THUMBYONE_LOBBY_HAS_P8 1
+#endif
+#ifndef THUMBYONE_LOBBY_HAS_DOOM
+#define THUMBYONE_LOBBY_HAS_DOOM 1
+#endif
+#ifndef THUMBYONE_LOBBY_HAS_MPY
+#define THUMBYONE_LOBBY_HAS_MPY 1
+#endif
+
+static const bool g_grid_slot_present[4] = {
+    THUMBYONE_LOBBY_HAS_NES,
+    THUMBYONE_LOBBY_HAS_P8,
+    THUMBYONE_LOBBY_HAS_DOOM,
+    THUMBYONE_LOBBY_HAS_MPY,
+};
+
+/* Pick the first enabled slot for the initial cursor position. If
+ * none are enabled the build would be empty anyway; fall back to 0
+ * so the lobby still renders something.  */
+static int first_enabled_slot(void) {
+    for (int i = 0; i < 4; ++i) if (g_grid_slot_present[i]) return i;
+    return 0;
+}
+
+#define GRID_TILE_SIZE  48
+#define GRID_ORIGIN_X   12
+#define GRID_ORIGIN_Y   12
+#define GRID_GUTTER      8
+
+/* Start the cursor on the first enabled slot so the initial render
+ * doesn't highlight a greyed-out tile. If all slots are disabled,
+ * stays at 0 — the build is essentially broken in that case but we
+ * don't want to crash at boot. */
+static int g_grid_cursor = 0;   /* 0..3 — overwritten in main()  */
+
+static void grid_tile_origin(int idx, int *ox, int *oy) {
+    int col = idx & 1;
+    int row = idx >> 1;
+    *ox = GRID_ORIGIN_X + col * (GRID_TILE_SIZE + GRID_GUTTER);
+    *oy = GRID_ORIGIN_Y + row * (GRID_TILE_SIZE + GRID_GUTTER);
+}
+
+static void draw_tile_border(int x, int y, uint16_t c) {
+    /* 2 px border outside the 48x48 tile so the tile isn't
+     * overdrawn. */
+    for (int i = -2; i < GRID_TILE_SIZE + 2; ++i) {
+        int xx = x + i;
+        if ((unsigned)xx >= 128) continue;
+        if (y - 2 >= 0 && y - 2 < 128) g_fb[(y - 2) * 128 + xx] = c;
+        if (y - 1 >= 0 && y - 1 < 128) g_fb[(y - 1) * 128 + xx] = c;
+        int by0 = y + GRID_TILE_SIZE;
+        int by1 = y + GRID_TILE_SIZE + 1;
+        if ((unsigned)by0 < 128) g_fb[by0 * 128 + xx] = c;
+        if ((unsigned)by1 < 128) g_fb[by1 * 128 + xx] = c;
+    }
+    for (int j = -2; j < GRID_TILE_SIZE + 2; ++j) {
+        int yy = y + j;
+        if ((unsigned)yy >= 128) continue;
+        if (x - 2 >= 0 && x - 2 < 128) g_fb[yy * 128 + (x - 2)] = c;
+        if (x - 1 >= 0 && x - 1 < 128) g_fb[yy * 128 + (x - 1)] = c;
+        int bx0 = x + GRID_TILE_SIZE;
+        int bx1 = x + GRID_TILE_SIZE + 1;
+        if ((unsigned)bx0 < 128) g_fb[yy * 128 + bx0] = c;
+        if ((unsigned)bx1 < 128) g_fb[yy * 128 + bx1] = c;
+    }
+}
+
+#define COL_SEL      0xFFE0    /* yellow selection border       */
+#define COL_SEL_OFF  0x8410    /* grey border for disabled tile */
+
+/* Darken the 48x48 region at (x, y) in place — per-channel shift
+ * to approximately 1/4 brightness. Applied to tiles whose slot
+ * isn't compiled into this build so they read as "present but
+ * unavailable" rather than missing entirely. */
+static void dim_tile(int x, int y) {
+    for (int j = 0; j < GRID_TILE_SIZE; ++j) {
+        int yy = y + j;
+        if ((unsigned)yy >= 128) continue;
+        for (int i = 0; i < GRID_TILE_SIZE; ++i) {
+            int xx = x + i;
+            if ((unsigned)xx >= 128) continue;
+            uint16_t p = g_fb[yy * 128 + xx];
+            uint32_t r = (p >> 11) & 0x1F;
+            uint32_t g = (p >>  5) & 0x3F;
+            uint32_t b = (p      ) & 0x1F;
+            r >>= 2; g >>= 2; b >>= 2;
+            g_fb[yy * 128 + xx] = (uint16_t)((r << 11) | (g << 5) | b);
+        }
+    }
+}
+
 static void render_home(void) {
     for (int i = 0; i < 128 * 128; ++i) g_fb[i] = COL_BG;
 
-    int w = nes_font_width_2x("THUMBY");
-    nes_font_draw_2x(g_fb, "THUMBY", (128 - w) / 2, 8, COL_TITLE);
-    w = nes_font_width_2x("ONE");
-    nes_font_draw_2x(g_fb, "ONE", (128 - w) / 2, 22, COL_TITLE);
+    /* Slim title strip — keeps vertical room for the grid + USB row. */
+    int w = nes_font_width("ThumbyOne");
+    nes_font_draw(g_fb, "ThumbyOne", (128 - w) / 2, 2, COL_TITLE);
 
-    for (int x = 4; x < 124; ++x) g_fb[38 * 128 + x] = COL_TEXT;
-
-    nes_font_draw(g_fb, "system selector",  2, 46, COL_TEXT);
-    nes_font_draw(g_fb, "A:   launch NES",  2, 58, COL_TEXT);
-    nes_font_draw(g_fb, "B:   launch P8",   2, 68, COL_TEXT);
-    nes_font_draw(g_fb, "LB:  launch DOOM", 2, 78, COL_TEXT);
-    nes_font_draw(g_fb, "RB:  launch MPY",  2, 88, COL_TEXT);
-    nes_font_draw(g_fb, "MENU: reboot",     2, 98, COL_TEXT);
+    /* Grid tiles. The table is indexed in visual left-to-right,
+     * top-to-bottom order to make the D-pad math straight-forward.
+     * Disabled tiles are drawn normally then darkened in place —
+     * the user still sees what's NOT in this build. */
+    for (int i = 0; i < 4 && i < (int)lobby_icons_count; ++i) {
+        int ox, oy;
+        grid_tile_origin(i, &ox, &oy);
+        lobby_icon_draw(g_fb, &lobby_icons[i], ox, oy);
+        if (!g_grid_slot_present[i]) {
+            dim_tile(ox, oy);
+        }
+        if (i == g_grid_cursor) {
+            uint16_t c = g_grid_slot_present[i] ? COL_SEL : COL_SEL_OFF;
+            draw_tile_border(ox, oy, c);
+        }
+    }
 
     /* The bottom strip gets managed by draw_usb_row so initial state
      * shows the "hold MENU at boot" hint until a host mounts. */
     g_usb_row_state = USB_ROW_NONE;
     draw_usb_row(g_usb_row_state);
+}
+
+static void redraw_home_if_cursor_moved(int prev_cursor) {
+    if (prev_cursor == g_grid_cursor) return;
+    render_home();
 }
 
 /* Compute which state the USB row should be in right now. */
@@ -309,6 +452,10 @@ int main(void) {
     gpio_init(PIN_BTN_B);    gpio_set_dir(PIN_BTN_B, GPIO_IN);    gpio_pull_up(PIN_BTN_B);
     gpio_init(PIN_BTN_LB);   gpio_set_dir(PIN_BTN_LB, GPIO_IN);   gpio_pull_up(PIN_BTN_LB);
     gpio_init(PIN_BTN_RB);   gpio_set_dir(PIN_BTN_RB, GPIO_IN);   gpio_pull_up(PIN_BTN_RB);
+    gpio_init(PIN_BTN_UP);    gpio_set_dir(PIN_BTN_UP, GPIO_IN);    gpio_pull_up(PIN_BTN_UP);
+    gpio_init(PIN_BTN_DOWN);  gpio_set_dir(PIN_BTN_DOWN, GPIO_IN);  gpio_pull_up(PIN_BTN_DOWN);
+    gpio_init(PIN_BTN_LEFT);  gpio_set_dir(PIN_BTN_LEFT, GPIO_IN);  gpio_pull_up(PIN_BTN_LEFT);
+    gpio_init(PIN_BTN_RIGHT); gpio_set_dir(PIN_BTN_RIGHT, GPIO_IN); gpio_pull_up(PIN_BTN_RIGHT);
 
     nes_lcd_init();
     nes_lcd_backlight(1);
@@ -350,6 +497,7 @@ int main(void) {
      * this device. */
     lobby_usb_init();
 
+    g_grid_cursor = first_enabled_slot();
     render_home();
 
     /* Slot-launch intent: set by a button press, consumed after the
@@ -375,18 +523,62 @@ int main(void) {
         }                                                                \
     } while (0)
 
+    /* Edge-detection state for the D-pad. We only act on a
+     * transition from not-pressed → pressed so holding a direction
+     * doesn't sweep the cursor uncontrollably across tiles. */
+    bool prev_up = false, prev_down = false;
+    bool prev_left = false, prev_right = false;
+
     while (1) {
         USB_PUMP();
 
+        int prev_cursor = g_grid_cursor;
+
+        /* D-pad navigation. UP/DOWN flip the row (cursor ^= 2);
+         * LEFT/RIGHT flip the column (cursor ^= 1). With four tiles
+         * any axis press always moves to a valid cell — but if the
+         * landed cell is a disabled slot, toggle the OTHER axis too
+         * so the cursor lands on a present tile. That effectively
+         * routes through to the diagonally-opposite cell, which is
+         * the "next" enabled tile in the build-flag matrices we
+         * actually ship (usually at least three of four are ON). */
+        bool now_up    = btn_up_pressed();
+        bool now_down  = btn_down_pressed();
+        bool now_left  = btn_left_pressed();
+        bool now_right = btn_right_pressed();
+
+        int  axis_mask = 0;
+        if (now_up    && !prev_up)    axis_mask ^= 2;
+        if (now_down  && !prev_down)  axis_mask ^= 2;
+        if (now_left  && !prev_left)  axis_mask ^= 1;
+        if (now_right && !prev_right) axis_mask ^= 1;
+        if (axis_mask) {
+            g_grid_cursor ^= axis_mask;
+            if (!g_grid_slot_present[g_grid_cursor]) {
+                g_grid_cursor ^= (axis_mask ^ 3);   /* flip the other axis */
+            }
+            if (!g_grid_slot_present[g_grid_cursor]) {
+                g_grid_cursor = first_enabled_slot();
+            }
+        }
+
+        prev_up    = now_up;
+        prev_down  = now_down;
+        prev_left  = now_left;
+        prev_right = now_right;
+
+        redraw_home_if_cursor_moved(prev_cursor);
+
         /* Debounce: record intent on press, but defer the actual
          * handoff until the button is released AND no MSC activity
-         * has happened in the last 500 ms. */
+         * has happened in the last 500 ms. A launches the cursor
+         * tile; MENU reboots the lobby. */
         if (pending_slot < 0) {
-            if (btn_a_pressed())       pending_slot = THUMBYONE_SLOT_NES;
-            else if (btn_b_pressed())  pending_slot = THUMBYONE_SLOT_P8;
-            else if (btn_lb_pressed()) pending_slot = THUMBYONE_SLOT_DOOM;
-            else if (btn_rb_pressed()) pending_slot = THUMBYONE_SLOT_MPY;
-            else if (btn_menu_pressed()) pending_slot = -2;   /* reboot lobby */
+            if (btn_a_pressed() && g_grid_slot_present[g_grid_cursor]) {
+                pending_slot = (int)g_grid_slot_order[g_grid_cursor];
+            } else if (btn_menu_pressed()) {
+                pending_slot = -2;   /* reboot lobby */
+            }
             if (pending_slot != -1) {
                 pending_since_us = (uint64_t)time_us_64();
             }
@@ -395,11 +587,8 @@ int main(void) {
         if (pending_slot != -1) {
             /* Wait for release. Pump USB while we wait. */
             bool still_held =
-                (pending_slot == THUMBYONE_SLOT_NES  && btn_a_pressed())  ||
-                (pending_slot == THUMBYONE_SLOT_P8   && btn_b_pressed())  ||
-                (pending_slot == THUMBYONE_SLOT_DOOM && btn_lb_pressed()) ||
-                (pending_slot == THUMBYONE_SLOT_MPY  && btn_rb_pressed()) ||
-                (pending_slot == -2                  && btn_menu_pressed());
+                (pending_slot == -2 && btn_menu_pressed()) ||
+                (pending_slot != -2 && btn_a_pressed());
             if (!still_held) {
                 /* Wait for USB to go quiet (500 ms since last op) so
                  * any in-flight host write has completed before we

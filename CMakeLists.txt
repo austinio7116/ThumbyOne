@@ -8,11 +8,16 @@
 #
 # Build:
 #   cmake -B build_device -DCMAKE_BUILD_TYPE=Release \
-#         [-DTHUMBYONE_WITH_NES=ON] \
-#         [-DTHUMBYONE_WITH_P8=OFF]   (not yet wired)
-#         [-DTHUMBYONE_WITH_DOOM=OFF] (not yet wired)
-#         [-DTHUMBYONE_WITH_MPY=OFF]  (not yet wired)
+#         [-DTHUMBYONE_WITH_NES=ON|OFF]   (default ON)
+#         [-DTHUMBYONE_WITH_P8=ON|OFF]    (default ON)
+#         [-DTHUMBYONE_WITH_DOOM=ON|OFF]  (default ON)
+#         [-DTHUMBYONE_WITH_MPY=ON|OFF]   (default ON)
 #   cmake --build build_device -j8
+#
+# Each flag toggles whether that slot's subproject is built and
+# included in the combined UF2. The lobby's grid also greys out
+# any disabled slot so the selector can't launch a partition
+# that isn't present.
 #
 # Output: build_device/thumbyone.uf2
 #
@@ -51,9 +56,28 @@ add_subdirectory(common)
 # ----- Lobby ----------------------------------------------------------
 # Flash at 0x10000000, absolute family UF2, partition table
 # embedded.
+# Pack the lobby's system-selector icons (48x48, 4-bit indexed) at
+# build time from the PNGs under lobby/icons/. Regenerates when any
+# PNG changes; the generated C is compiled into the lobby executable
+# alongside lobby_icons.c's blit function.
+set(LOBBY_ICONS_DIR ${CMAKE_CURRENT_SOURCE_DIR}/lobby/icons)
+set(LOBBY_ICONS_GEN ${CMAKE_CURRENT_BINARY_DIR}/lobby_icons_data.c)
+file(GLOB LOBBY_ICON_PNGS CONFIGURE_DEPENDS ${LOBBY_ICONS_DIR}/*.png)
+add_custom_command(
+    OUTPUT  ${LOBBY_ICONS_GEN}
+    COMMAND python3 ${CMAKE_CURRENT_SOURCE_DIR}/tools/pack_icons.py
+            ${LOBBY_ICONS_DIR} ${LOBBY_ICONS_GEN}
+    DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/tools/pack_icons.py
+            ${LOBBY_ICON_PNGS}
+    COMMENT "Packing lobby system icons"
+    VERBATIM
+)
+
 add_executable(lobby
     lobby/lobby_main.c
     lobby/lobby_usb.c
+    lobby/lobby_icons.c
+    ${LOBBY_ICONS_GEN}
     ${THUMBYONE_PICKER_UI_SRC}
     ${THUMBYONE_COMMON_SRC}
     ${THUMBYONE_COMMON_FS_SRC}
@@ -80,6 +104,16 @@ target_link_libraries(lobby PRIVATE
     hardware_flash
     tinyusb_device
     tinyusb_board
+)
+
+# Which slots are present in this build? The lobby grid greys out
+# any disabled tile and skips it during D-pad navigation. 1 / 0 so
+# the lobby can just drop the define into a bool array initialiser.
+target_compile_definitions(lobby PRIVATE
+    THUMBYONE_LOBBY_HAS_NES=$<IF:$<BOOL:${THUMBYONE_WITH_NES}>,1,0>
+    THUMBYONE_LOBBY_HAS_P8=$<IF:$<BOOL:${THUMBYONE_WITH_P8}>,1,0>
+    THUMBYONE_LOBBY_HAS_DOOM=$<IF:$<BOOL:${THUMBYONE_WITH_DOOM}>,1,0>
+    THUMBYONE_LOBBY_HAS_MPY=$<IF:$<BOOL:${THUMBYONE_WITH_MPY}>,1,0>
 )
 pico_embed_pt_in_binary(lobby ${THUMBYONE_PT_JSON})
 pico_set_uf2_family(lobby "absolute")

@@ -1,5 +1,11 @@
 # ThumbyOne — unified multi-boot firmware plan
 
+> **Status.** The plan below is realised — all four slots boot, the
+> lobby selector is a 2×2 icon grid, USB MSC is centralised in the
+> lobby, and every slot returns via an explicit menu item. See
+> [`README.md`](README.md) for the current user-facing summary.
+> This file is kept as design history / future-work notes.
+
 **Goal.** One firmware image the user flashes once that bundles any
 combination of:
 
