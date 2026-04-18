@@ -209,17 +209,14 @@ void nes_lcd_release(void) {
      * engine's GC9107 driver). The engine left SPI0 enabled and
      * its own DMA channel claimed; we must NOT reset either.
      *
-     * We do:
-     *   1. Drain our DMA so the panel isn't mid-transfer.
-     *   2. Release our claimed DMA channel (a different one from
-     *      the engine's — dma_claim_unused_channel gave us one of
-     *      the 16 free slots).
-     *   3. Deassert CS so the next command from the engine starts
-     *      a fresh transaction.
-     *   4. Re-enable SPI0 in 16-bit mode. spi_init in our init path
-     *      may have left it in 8-bit after the last command write;
-     *      the engine's present() forces 16-bit via CR0, so this is
-     *      technically redundant but cheap insurance. */
+     * Also: find the engine's OWN display DMA channel (the one
+     * with DREQ_SPI0_TX set in its ctrl register) and abort it.
+     * The engine may have been mid-transfer when our IRQ fired;
+     * leaving the channel stuck in "busy" means the engine's next
+     * `dma_channel_wait_for_finish_blocking(dma_tx)` hangs forever.
+     * Aborting doesn't hurt — the engine's next reset_window()
+     * starts a fresh RAMWR so the panel doesn't care about the
+     * half-delivered pixels. */
     nes_lcd_wait_idle();
     gpio_put(PIN_CS, 1);
     if (dma_ch >= 0) {
@@ -228,5 +225,24 @@ void nes_lcd_release(void) {
         dma_channel_unclaim(dma_ch);
         dma_ch = -1;
     }
+
+    /* Abort any other DMA channel still busy on SPI0 TX — that's
+     * the engine's display DMA. Reading al1_ctrl doesn't trigger
+     * the channel (unlike ctrl_trig). */
+    for (uint ch = 0; ch < NUM_DMA_CHANNELS; ++ch) {
+        uint32_t ctrl = dma_hw->ch[ch].al1_ctrl;
+        bool busy = (ctrl & DMA_CH0_CTRL_TRIG_BUSY_BITS) != 0;
+        uint treq = (ctrl & DMA_CH0_CTRL_TRIG_TREQ_SEL_BITS) >>
+                    DMA_CH0_CTRL_TRIG_TREQ_SEL_LSB;
+        if (busy && treq == DREQ_SPI0_TX) {
+            dma_channel_abort(ch);
+        }
+    }
+
+    /* Drain any bytes still in the SPI TX FIFO now that no DMA
+     * is refilling it. */
+    while (spi_get_hw(LCD_SPI)->sr & SPI_SSPSR_BSY_BITS)
+        tight_loop_contents();
+
     spi_set_format(LCD_SPI, 16, SPI_CPOL_1, SPI_CPHA_1, SPI_MSB_FIRST);
 }

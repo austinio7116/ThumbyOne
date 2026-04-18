@@ -1,29 +1,20 @@
 /*
- * ThumbyOne — MENU-long-hold overlay + return-to-lobby watchdog.
+ * ThumbyOne — MENU-long-hold return-to-lobby watchdog.
  *
  * While an MPY game is running, a pico-sdk repeating timer polls
  * GPIO 26 (MENU) at 50 Hz. When MENU has been held for ~500 ms, the
  * timer callback STEALS the LCD via the common nes_lcd_gc9107
- * driver (clobbering whatever the engine is pushing) and draws a
- * small overlay with battery, firmware, and two choices:
+ * driver, flashes a "returning to picker..." overlay with battery
+ * and firmware info for ~700 ms, then reboots to the lobby.
  *
- *      > Back to lobby   (A)
- *        Resume game     (B or release MENU)
+ * The overlay used to offer a "resume game" path but handing the
+ * LCD back to the already-running engine from IRQ context is
+ * flaky — the engine's DMA + SPI state can't be cleanly reconciled.
+ * The resume path has been removed until that can be solved; for
+ * now MENU-hold is a one-shot back-to-lobby gesture.
  *
- * All of this runs inside the IRQ — which is unusual but works on
- * Cortex-M33: the game's foreground loop is suspended while the
- * ISR is running, and the LCD driver's DMA completion IRQ can nest.
- *
- * On "Back to lobby": thumbyone_handoff_request_lobby() fires and
- * the chip reboots.
- *
- * On "Resume game": the LCD driver is torn down (releasing its DMA
- * channel and deinit-ing SPI0). The engine's next display.send()
- * re-initialises SPI/DMA from its own side and starts pushing
- * frames again — there's a brief glitch as the first post-overlay
- * frame fights the torn-down state, but the engine recovers on the
- * next tick. For a hold-MENU-to-exit flow that the user can always
- * cancel, that one frame of glitch is a reasonable trade.
+ * Everything runs inside the IRQ — which is unusual but works on
+ * Cortex-M33 since overlay_run() never returns (it reboots).
  */
 #include "menu_watchdog.h"
 
@@ -128,21 +119,23 @@ static void fb_rect(int x, int y, int w, int h, uint16_t c) {
 
 /* --- overlay render ---------------------------------------------- */
 
-typedef enum {
-    OVL_ITEM_LOBBY  = 0,
-    OVL_ITEM_RESUME,
-    OVL_ITEM_COUNT,
-} ovl_item_t;
+static inline bool btn(uint pin) { return !gpio_get(pin); }
 
-static void draw_overlay(int cursor) {
+/* Resuming the game after the overlay runs is currently broken —
+ * the engine's display DMA + SPI state can't be handed back cleanly
+ * from IRQ context. Until that's solved, the overlay is "back to
+ * lobby" one-shot only: flash a confirmation and reboot. */
+
+static void draw_handoff_overlay(void) {
     fb_fill(COL_BG);
 
     /* Orange title bar + underline. */
     nes_font_draw(g_ovl_fb, "MENU", 2, 2, COL_TITLE);
     fb_hline(0, 10, 128, COL_TITLE);
 
-    /* Battery info. */
-    int y = 14;
+    int y = 16;
+
+    /* Battery row. */
     {
         int pct = ovl_battery_percent();
         float v = ovl_battery_voltage();
@@ -158,56 +151,37 @@ static void draw_overlay(int cursor) {
         fb_rect(8, y + 7, 112, 2, COL_BAR_BG);
         int fill = (112 * (pct < 0 ? 0 : (pct > 100 ? 100 : pct))) / 100;
         fb_rect(8, y + 7, fill, 2, COL_HIGHLT);
-        y += 10;
+        y += 12;
     }
 
-    /* Firmware. */
+    /* Firmware row. */
     {
         nes_font_draw(g_ovl_fb, "fw", 4, y, COL_DIM);
         const char *fw = "ONE " THUMBYONE_FW_VERSION;
         int vw = nes_font_width(fw);
         nes_font_draw(g_ovl_fb, fw, 128 - vw - 4, y, COL_FG);
-        y += 10;
+        y += 14;
     }
 
-    /* Divider before actions. */
+    /* Main message, centred. */
     fb_hline(8, y, 112, COL_DIM);
-    y += 4;
+    y += 10;
 
-    /* Action rows. */
-    const char *labels[OVL_ITEM_COUNT] = {
-        [OVL_ITEM_LOBBY]  = "back to lobby",
-        [OVL_ITEM_RESUME] = "resume game",
-    };
-    for (int i = 0; i < OVL_ITEM_COUNT; ++i) {
-        bool here = (i == cursor);
-        if (here) fb_rect(0, y - 1, 128, 10, COL_HL_BG);
-        uint16_t fg = here ? COL_HIGHLT : COL_FG;
-        if (here) nes_font_draw(g_ovl_fb, ">", 2, y, fg);
-        nes_font_draw(g_ovl_fb, labels[i], 10, y, fg);
-        y += 10;
-    }
+    const char *msg1 = "returning to";
+    const char *msg2 = "picker...";
+    int w1 = nes_font_width(msg1);
+    int w2 = nes_font_width(msg2);
+    nes_font_draw(g_ovl_fb, msg1, (128 - w1) / 2, y,     COL_HIGHLT);
+    nes_font_draw(g_ovl_fb, msg2, (128 - w2) / 2, y + 10, COL_HIGHLT);
 
-    /* Footer hint. */
+    /* Footer bar. */
     fb_hline(0, 120, 128, COL_TITLE);
-    const char *hint =
-        (cursor == OVL_ITEM_LOBBY)  ? "A: go to lobby" :
-        (cursor == OVL_ITEM_RESUME) ? "A: resume"      :
-                                      "A: select";
-    int hw = nes_font_width(hint);
-    nes_font_draw(g_ovl_fb, hint, (128 - hw) / 2, 122, COL_DIM);
 
     nes_lcd_present(g_ovl_fb);
     nes_lcd_wait_idle();
 }
 
-/* --- overlay input loop ------------------------------------------ */
-
-static inline bool btn(uint pin) { return !gpio_get(pin); }
-
-/* Run the overlay synchronously. Returns when the user cancels
- * (B / MENU release) — or never returns, if they picked "Back to
- * lobby" (the handoff reboots the chip). */
+/* Run the overlay then reboot to the lobby. Does not return. */
 static void overlay_run(void) {
     g_overlay_active = true;
 
@@ -217,92 +191,17 @@ static void overlay_run(void) {
      * our own to push pixels. */
     nes_lcd_acquire();
 
-    int cursor = OVL_ITEM_LOBBY;
-    /* The menu opened because MENU was HELD, so initialise prev_menu
-     * to 'pressed' and wait for the actual release before reading
-     * any other prev_. This avoids auto-closing on the MENU release
-     * that the user hasn't issued yet. */
-    bool prev_a = false;
-    bool prev_b = false;
-    bool prev_up = false;
-    bool prev_down = false;
+    draw_handoff_overlay();
 
-    draw_overlay(cursor);
+    /* Give the user ~700ms to register the confirmation before
+     * we reboot. Using busy_wait so we remain safe inside IRQ
+     * context. */
+    for (int i = 0; i < 70; ++i) busy_wait_ms(10);
 
-    /* Wait for the opening MENU hold to end so we don't mistake
-     * that release for a "cancel overlay" gesture. */
-    while (btn(MENU_PIN)) busy_wait_ms(10);
-
-    uint32_t tick = 0;
-    while (1) {
-        bool a = btn(A_PIN);
-        bool b = btn(B_PIN);
-        bool u = btn(UP_PIN);
-        bool d = btn(DOWN_PIN);
-        bool m = btn(MENU_PIN);
-
-        bool dirty = false;
-        if (u && !prev_up && cursor > 0)                 { --cursor; dirty = true; }
-        if (d && !prev_down && cursor < OVL_ITEM_COUNT-1){ ++cursor; dirty = true; }
-
-        if (a && !prev_a) {
-            if (cursor == OVL_ITEM_LOBBY) {
-                nes_lcd_wait_idle();
-                thumbyone_handoff_request_lobby();
-                /* does not return */
-            } else {
-                break;   /* resume */
-            }
-        }
-        /* Only B or a fresh MENU press cancels (MENU toggles the
-         * overlay closed). Ignore MENU release — the opening hold
-         * is over by now. */
-        if (b && !prev_b) break;
-        if (m && !prev_up) {
-            /* reserved: fresh MENU-press while overlay is up —
-             * same as B. */
-        }
-
-        prev_a = a; prev_b = b; prev_up = u; prev_down = d;
-        (void)m;
-
-        /* Tiny "loop alive" heartbeat in the top-right of the title
-         * bar — cycles through 4 pixel positions so we can visually
-         * tell if the loop is running even when no input has been
-         * detected. If it's animating but nothing else happens,
-         * we've proved the freeze is in input detection rather than
-         * the loop itself. */
-        tick++;
-        const uint16_t blip_on  = 0x07E0;
-        const uint16_t blip_off = 0x0000;
-        for (int k = 0; k < 4; ++k) {
-            bool on = (k == (int)(tick & 3));
-            g_ovl_fb[2 * 128 + (120 + k)] = on ? blip_on : blip_off;
-        }
-
-        if (dirty) {
-            draw_overlay(cursor);
-        } else {
-            /* Push just enough fb to show the tick. */
-            nes_lcd_present(g_ovl_fb);
-            nes_lcd_wait_idle();
-        }
-        busy_wait_ms(50);
-    }
-
-    /* Resume path: hand the LCD back to the engine. Engine's next
-     * present() will set its own SPI format + window and push
-     * frames using its own DMA channel. We must NOT reset the
-     * SPI0 or DMA peripheral blocks here — that would wipe the
-     * engine's claimed audio + display DMA channels and cause
-     * the engine to hang on its next tick. */
-    nes_lcd_release();
-
-    /* Drain any still-held buttons so the game doesn't see the press
-     * that closed the overlay. */
-    while (btn(A_PIN) || btn(B_PIN) || btn(MENU_PIN)) busy_wait_ms(10);
-
-    g_overlay_active = false;
+    nes_lcd_wait_idle();
+    thumbyone_handoff_request_lobby();
+    /* does not return */
+    while (1) tight_loop_contents();
 }
 
 /* --- timer callback ---------------------------------------------- */
