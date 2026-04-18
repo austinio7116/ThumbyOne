@@ -593,8 +593,6 @@ Each system in ThumbyOne is a complete standalone firmware in its own repo; Thum
 - **[TinyCircuits-Tiny-Game-Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine)** (austinio7116 fork) — MicroPython + engine slot
 - **[mp-thumby](https://github.com/austinio7116/micropython)** (`thumbyone-slot` branch) — MicroPython port with the ThumbyOne hooks
 
-All built by [austinio7116](https://github.com/austinio7116) before ThumbyOne existed. ThumbyOne is the binder; the systems are the books.
-
 ### The upstream projects the slots stand on
 
 - **[TinyCircuits](https://tinycircuits.com/)** — made the Thumby Color.

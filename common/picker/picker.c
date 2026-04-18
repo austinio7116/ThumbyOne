@@ -37,6 +37,7 @@
 #include "lcd_gc9107.h"
 #include "font.h"
 #include "picker_bmp.h"
+#include "menu_watchdog.h"
 #include "ff.h"
 #include "thumbyone_fs.h"
 #include "thumbyone_handoff.h"
@@ -1250,6 +1251,12 @@ int thumbyone_picker_run(void) {
                 f_unmount("");
                 nes_lcd_wait_idle();
                 nes_lcd_teardown();
+                /* Arm the MENU-long-hold watchdog so the user can
+                 * bail back to the top-level lobby from inside a
+                 * MicroPython game — games own the LCD + button
+                 * polling from here on, but our background timer
+                 * still fires from IRQ context. */
+                thumbyone_menu_watchdog_install();
                 return 0;
             }
 

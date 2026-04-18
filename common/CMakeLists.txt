@@ -82,6 +82,7 @@ set(THUMBYONE_PICKER_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/picker/lcd_gc9107.c
     ${CMAKE_CURRENT_SOURCE_DIR}/picker/font.c
     ${CMAKE_CURRENT_SOURCE_DIR}/picker/picker_bmp.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/picker/menu_watchdog.c
     ${CMAKE_CURRENT_SOURCE_DIR}/picker/picker.c
     PARENT_SCOPE)
 
