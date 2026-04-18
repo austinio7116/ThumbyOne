@@ -211,11 +211,11 @@ static inline bool btn(uint pin) { return !gpio_get(pin); }
 static void overlay_run(void) {
     g_overlay_active = true;
 
-    /* Steal the LCD — engine's current DMA/SPI state gets clobbered
-     * by nes_lcd_init, but we'll teardown at the end and the engine's
-     * next present() will re-establish its own state. */
-    nes_lcd_init();
-    nes_lcd_backlight(1);
+    /* Take over the LCD without disturbing engine state — SPI0 is
+     * already alive, panel is already initialised, backlight is
+     * already running on PIO-PWM. We just need a DMA channel of
+     * our own to push pixels. */
+    nes_lcd_acquire();
 
     int cursor = OVL_ITEM_LOBBY;
     /* The menu opened because MENU was HELD, so initialise prev_menu

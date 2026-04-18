@@ -185,6 +185,24 @@ void nes_lcd_teardown(void) {
         RESETS_RESET_SPI0_BITS | RESETS_RESET_DMA_BITS);
 }
 
+void nes_lcd_acquire(void) {
+    /* Engine has already spi_init'd SPI0, PIO-PWM'd the backlight,
+     * RST-pulsed the panel, and sent the full init sequence. All we
+     * need is a DMA channel to push pixels through — the rest of
+     * the hardware is good to use as-is. */
+    if (dma_ch < 0) {
+        dma_ch = dma_claim_unused_channel(true);
+        dma_cfg = dma_channel_get_default_config(dma_ch);
+        channel_config_set_transfer_data_size(&dma_cfg, DMA_SIZE_16);
+        channel_config_set_dreq(&dma_cfg, DREQ_SPI0_TX);
+    }
+    /* Drain any engine-in-flight SPI traffic so our first command
+     * write (the window/RAMWR setup inside nes_lcd_present) starts
+     * on a quiet bus. */
+    while (spi_get_hw(LCD_SPI)->sr & SPI_SSPSR_BSY_BITS)
+        tight_loop_contents();
+}
+
 void nes_lcd_release(void) {
     /* Softer than teardown: hands the LCD back to an already-
      * initialised driver in the same address space (the MPY

@@ -48,4 +48,17 @@ void nes_lcd_teardown(void);
  * DMA channels (audio + display) and wedge it. */
 void nes_lcd_release(void);
 
+/* Lightweight counterpart to nes_lcd_init: use when SPI0, the
+ * panel, and the LCD GPIOs have ALREADY been initialised by some
+ * other driver in the same address space (the MPY engine's
+ * GC9107 driver). We do NOT:
+ *   - reset SPI0 via spi_init (destroys engine mid-transfer),
+ *   - pulse the panel RST line,
+ *   - reclaim GP7 (the engine drives the backlight via PIO),
+ *   - send any panel init commands.
+ * We just claim a spare DMA channel and configure it for 16-bit
+ * SPI0-TX pixel streaming. After the overlay finishes, call
+ * nes_lcd_release() to unclaim the channel. */
+void nes_lcd_acquire(void);
+
 #endif
