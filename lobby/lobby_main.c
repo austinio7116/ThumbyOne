@@ -700,7 +700,7 @@ static void fmt_kb(char *out, size_t cap, uint32_t kb) {
 }
 
 #ifndef THUMBYONE_FW_VERSION
-#define THUMBYONE_FW_VERSION "1.0"
+#define THUMBYONE_FW_VERSION "1.01"
 #endif
 
 static void render_lobby_menu(int cursor) {

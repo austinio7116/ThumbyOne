@@ -137,7 +137,7 @@ The lobby is the home screen. It's a 2×2 grid of system icons: NES, PICO-8, DOO
 | ThumbyNES (NES / SMS / GG / GB) | **MENU** (hold ~0.5 s in-game) → pause menu → **Back to lobby** |
 | ThumbyP8 (PICO-8) | **MENU** (hold ~0.5 s in-game) → PICO-8 pause menu → **Back to lobby** |
 | ThumbyDOOM | In-game Main Menu → **Quit Game** (no confirm dialog in slot mode) |
-| MicroPython + Engine | **MENU** held ~5 s in-game — direct reboot to lobby (deliberate long hold because it drops the Python state) |
+| MicroPython + Engine | **MENU** held ~5 s in-game — direct reboot to the lobby (no on-screen prompt; game state is lost, so the hold is deliberately long to prevent accidents) |
 
 A small **USB** label + LED dot in the top-right corner of the lobby — and the device's physical RGB LED — both show the USB state:
 
@@ -315,12 +315,9 @@ The real deal. Music, sound effects, save games, screen melts, all on a 128×128
 *The stock Thumby Color experience — [TinyCircuits-Tiny-Game-Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine) plus MicroPython.*
 
 <p align="center">
-  <img src="docs/screenshots/mpy-picker.jpg"  width="380" alt="MPY hero picker — DeepThumb">
-  <img src="docs/screenshots/mpy-menu.jpg"    width="380" alt="MPY picker menu overlay">
-</p>
-<p align="center">
-  <img src="docs/screenshots/mpy-game.jpg"    width="380" alt="DeepThumb chess — running MPY game">
-  <img src="docs/screenshots/mpy-overlay.jpg" width="380" alt="MPY in-game hold-MENU overlay — back to lobby / resume">
+  <img src="docs/screenshots/mpy-picker.jpg" width="380" alt="MPY hero picker — DeepThumb">
+  <img src="docs/screenshots/mpy-menu.jpg"   width="380" alt="MPY picker menu overlay">
+  <img src="docs/screenshots/mpy-game.jpg"   width="380" alt="DeepThumb chess — running MPY game">
 </p>
 
 MicroPython with the Tiny Game Engine C module baked in, running a custom C picker that replaces the stock launcher entirely. Drop a game folder into `/games/<GameName>/` with a `main.py`, an `icon.bmp`, and an `arcade_description.txt`, and it appears on the hero picker with full artwork, title, and blurb.
@@ -349,7 +346,7 @@ MicroPython with the Tiny Game Engine C module baked in, running a custom C pick
 | A | Launch the selected game |
 | B | Toggle favourite (★) for the highlighted game |
 | MENU (in picker) | Open info overlay (battery, disk, sort, back to lobby) |
-| MENU (held ~5 s in-game) | Return to lobby — brief "returning to picker..." splash, then reboot |
+| MENU (held ~5 s in-game) | Reboot to the lobby (no splash; game state is lost) |
 
 **Game structure** in `/games/<name>/`:
 
@@ -634,12 +631,19 @@ main()
 
 **SRAM discipline:**
 
+Bolting a pre-Python C picker onto MicroPython has a cost: the picker's framebuffer, icon cache, game-metadata table, etc. can't just live in plain `.bss` — that would push `__bss_end__` up and permanently steal RAM from the MicroPython GC heap for data that's only alive for a second at boot. Several measures keep the slot honest:
+
+- **`.picker_scratch` linker section** ([`memmap_mp_rp2350.ld`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/memmap_mp_rp2350.ld)) — a NOLOAD section pinned to `__StackLimit` (which equals `__GcHeapStart`). The picker's 32 KB framebuffer (`g_fb`), 8 KB icon cache (`g_icon_px`), and 4 KB game-metadata table (`g_games`) all live in this section via `__attribute__((section(".picker_scratch")))`. Because the section's address range sits *inside* the GC heap range, `gc_init()` claims those same bytes as heap once MicroPython is up. The picker uses them before `mp_init`, then they're transparently reclaimed — no code change, no `free` call, just linker alignment. Net: ~44 KB that would otherwise be stuck in BSS is returned to the GC heap.
+- **No in-game overlay** — MENU-long-hold used to pop a 128×128 "returning to picker..." splash before rebooting, which required carrying a permanent 32 KB BSS framebuffer (`g_ovl_fb`) plus the LCD-acquire / SPI-release plumbing to steal the panel mid-frame from the running engine. The overlay has been dropped entirely; 5 s MENU hold reboots directly. The 5 s threshold is deliberate enough to not need visual confirmation. Saving: 32 KB BSS + several KB of code.
+- **Menu-backdrop regenerated, not cached** — opening the picker's in-picker menu used to snapshot the hero frame into a dedicated `g_menu_backdrop[128×128]` so it could be restored + darkened on every cursor move. That 32 KB cache is gone; the menu renderer now re-renders the hero into `g_fb` and darkens in place. The redraw cost is trivial.
 - **Frozen manifest pipeline** — launcher, `_boot_fat.py`, and assorted helpers are compiled to bytecode and frozen into the firmware image. No `.py` / `.mpy` files to pay FAT space for, no parse-time RAM on boot.
 - **Shared flash-write RMW buffer** — `rp2_flash.c` uses a single `static uint8_t s_rmw_buf[FLASH_ERASE_BLOCK]` (+ a `static uint32_t s_saved_atrans[4]` for ATRANS save/restore around flash ops); every `flash.writeblocks` call reuses them, no per-call mallocs.
 - **Shared MSC RMW buffer** — the lobby's `msc_disk.c` has one `static uint8_t s_msc_rmw_buf[FLASH_ERASE_SIZE]` that serves every host write.
 - **Fixed-size PIO state tables** — `rp2_state_machine_initial_pc[NUM_PIOS*4]`, `rp2_pio_instruction_memory_usage_mask[NUM_PIOS]` — no dynamic PIO allocation overhead.
 - **One-slot-at-a-time residency** — MPY gets the full 520 KB SRAM when running; no co-residency with NES / P8 / DOOM, so the MicroPython heap doesn't have to be pre-partitioned around sibling VMs.
 - **`/system/` assets stay in XIP** — fonts, splash graphics, launcher art all served from `.rodata` by `thumbyone_rom_vfs.c`, never copied into RAM. Cumulative saving: 376 KB of files that would otherwise live on the FAT and, if `in_ram=True`, in SRAM too.
+
+**Measured impact (v1.01):** MPY-slot BSS went from 123 KB to 13 KB — a ~108 KB net reclaim to the MicroPython GC heap. Enough to unblock games that import-heavy at startup (Thumbalaga was hitting MemoryError on its 30th `import` under v1.0 but not under stock firmware; v1.01 matches stock).
 
 ## Lobby architecture
 

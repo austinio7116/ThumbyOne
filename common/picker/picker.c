@@ -47,7 +47,7 @@
  * -DTHUMBYONE_FW_VERSION=\"abc1234\". Fallback is a short marker so
  * the info strip always has something to show. */
 #ifndef THUMBYONE_FW_VERSION
-#define THUMBYONE_FW_VERSION "1.0"
+#define THUMBYONE_FW_VERSION "1.01"
 #endif
 
 /* --- button pins (match engine_io_rp3.h) ------------------------- */
