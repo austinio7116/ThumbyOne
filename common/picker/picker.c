@@ -695,7 +695,12 @@ static void render_error(const char *line1, const char *line2) {
 }
 
 /* Render the hero view for the game at g_order[sel]. */
-static void render_hero(int sel) {
+/* Draw the hero layout into g_fb WITHOUT pushing to the LCD. Used
+ * directly by render_menu() so the darken + overlay can happen
+ * before the single present — otherwise the user sees a full-bright
+ * flash of the hero frame every time the menu redraws (every cursor
+ * move). render_hero() below is the wrapper that draws + presents. */
+static void render_hero_fb(int sel) {
     fb_fill(COL_BG);
 
     /* Top strip: "MPY" banner left, pos + favourite-star right. */
@@ -787,7 +792,11 @@ static void render_hero(int sel) {
     const char *hint = "A play B fav MENU";
     int hw = nes_font_width(hint);
     nes_font_draw(g_fb, hint, (128 - hw) / 2, 121, COL_HEAD);
+}
 
+/* Public hero render: draw + push to LCD. */
+static void render_hero(int sel) {
+    render_hero_fb(sel);
     present_blocking();
 }
 
@@ -797,6 +806,12 @@ static void render_hero(int sel) {
  * MPY picker's "2.3M/9.6M" row matches the lobby / NES / P8 picker
  * menus to the byte. */
 #include "thumbyone_fs_stats.h"
+
+/* Global settings + backlight — the MPY picker applies the saved
+ * /.brightness on entry (LCD driver came up at full) and consults
+ * /.volume for the engine-bridge logic in thumbyone_launcher. */
+#include "thumbyone_settings.h"
+#include "thumbyone_backlight.h"
 
 /* In-place darken the framebuffer to ~1/4 brightness, per-channel.
  * Copy of ThumbyNES nes_menu.c's darken_fb — kept verbatim so the
@@ -924,8 +939,11 @@ static const char *menu_label(menu_item_t it) {
 static void render_menu(int sel) {
     /* Synthesise the backdrop: re-render the hero into g_fb, then
      * darken in place. Saves the 32 KB cache buffer we used to
-     * keep for this. */
-    render_hero(sel);
+     * keep for this. Important: use the _fb variant that doesn't
+     * push to the LCD — otherwise the user sees a full-bright
+     * flash of the hero between this call and the final present
+     * at the bottom of render_menu. */
+    render_hero_fb(sel);
     darken_fb(g_fb);
 
     /* Title bar — black strip with orange underline. */
@@ -1055,6 +1073,12 @@ int thumbyone_picker_run(void) {
 
     FATFS g_fs;
     FRESULT r = thumbyone_fs_mount(&g_fs);
+    if (r == FR_OK) {
+        /* Apply the ThumbyOne system-wide brightness — same
+         * /.brightness the lobby + NES + P8 pick up. Has to happen
+         * after the FAT mount; the LCD driver came up at full. */
+        thumbyone_backlight_set(thumbyone_settings_load_brightness());
+    }
     if (r != FR_OK) {
         render_error("mount failed", "go to lobby, wipe");
         while (1) {

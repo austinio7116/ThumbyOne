@@ -602,6 +602,12 @@ static bool  battery_charging(void) { bool  c = false; thumbyone_battery_read(NU
  * numbers and on bar direction (fill = used). */
 #include "thumbyone_fs_stats.h"
 
+/* Global-settings + backlight — the lobby is the primary place
+ * the user controls these, but NES/P8/MPY also read them and
+ * apply on boot so "set in lobby" = "applies everywhere". */
+#include "thumbyone_settings.h"
+#include "thumbyone_backlight.h"
+
 /* --- menu palette (NES-style) --- */
 #define L_COL_BG       0x0000
 #define L_COL_PANEL    0x10A2
@@ -619,17 +625,27 @@ typedef enum {
     LMI_DISK,
     LMI_USB,
     LMI_FW,
+    LMI_VOL,        /* adjustable: LEFT/RIGHT to change */
+    LMI_BRIGHT,     /* adjustable: LEFT/RIGHT to change, live-applied */
     LMI_CLOSE,
     LMI_COUNT,
 } lobby_menu_item_t;
 
 static bool lobby_menu_item_selectable(lobby_menu_item_t it) {
-    return it == LMI_CLOSE;
+    return it == LMI_VOL || it == LMI_BRIGHT || it == LMI_CLOSE;
 }
 
 /* Scratch backdrop used while the menu is up — captured at open,
  * redrawn each menu frame. */
 static uint16_t g_menu_backdrop[128 * 128] __attribute__((aligned(4)));
+
+/* Live settings values while the menu is open. Loaded from
+ * /.volume + /.brightness on menu-open; slider input mutates these
+ * in place; brightness apply happens live via the PWM backlight on
+ * every change; persisting to FAT happens once on menu close if
+ * the values actually moved. */
+static int  g_menu_volume     = THUMBYONE_VOLUME_DEFAULT;
+static int  g_menu_brightness = THUMBYONE_BRIGHTNESS_DEFAULT;
 
 static void darken_fb_full(uint16_t *fb) {
     for (int i = 0; i < 128 * 128; ++i) {
@@ -640,6 +656,22 @@ static void darken_fb_full(uint16_t *fb) {
         r >>= 2; g >>= 2; b >>= 2;
         fb[i] = (uint16_t)((r << 11) | (g << 5) | b);
     }
+}
+
+/* Fill a menu-row-height rectangle in the highlight colour so the
+ * selected row reads as a proper band (matches the NES menu + MPY
+ * picker's pattern — they use fill_rect / fb_rect with ROW_H
+ * height). Previously the lobby was only filling a single scanline
+ * at y-1 which showed as a thin green hairline — very hard to see
+ * which row the cursor was on. */
+static void fill_row_hl(int y, int row_h) {
+    int y0 = y - 1;
+    int y1 = y0 + row_h;
+    if (y0 < 0) y0 = 0;
+    if (y1 > 128) y1 = 128;
+    for (int yy = y0; yy < y1; ++yy)
+        for (int xx = 0; xx < 128; ++xx)
+            g_fb[yy * 128 + xx] = L_COL_HL_BG;
 }
 
 static void draw_thin_bar(int x, int y, int w, int h,
@@ -690,7 +722,7 @@ static void render_lobby_menu(int cursor) {
         uint16_t col = chg ? L_COL_HIGHLT
                            : (pct < 15 ? 0xF800 : L_COL_TEXT);
         int cursor_here = (cursor == LMI_BATT);
-        if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
+        if (cursor_here) fill_row_hl(y, row_h);
         nes_font_draw(g_fb, "batt", 4, y, L_COL_DIM);
         int vw = nes_font_width(val);
         nes_font_draw(g_fb, val, 128 - vw - 4, y, col);
@@ -706,7 +738,7 @@ static void render_lobby_menu(int cursor) {
         char val[24];
         thumbyone_fs_fmt_used_total(used_b, total_b, val, sizeof(val));
         int cursor_here = (cursor == LMI_DISK);
-        if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
+        if (cursor_here) fill_row_hl(y, row_h);
         nes_font_draw(g_fb, "disk", 4, y, L_COL_DIM);
         int vw = nes_font_width(val);
         nes_font_draw(g_fb, val, 128 - vw - 4, y, L_COL_TEXT);
@@ -731,7 +763,7 @@ static void render_lobby_menu(int cursor) {
         default:             val = "unplugged";   col = L_COL_DIM;      break;
         }
         int cursor_here = (cursor == LMI_USB);
-        if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
+        if (cursor_here) fill_row_hl(y, row_h);
         nes_font_draw(g_fb, "USB", 4, y, L_COL_DIM);
         int vw = nes_font_width(val);
         nes_font_draw(g_fb, val, 128 - vw - 4, y, col);
@@ -742,10 +774,43 @@ static void render_lobby_menu(int cursor) {
     {
         const char *val = "ONE " THUMBYONE_FW_VERSION;
         int cursor_here = (cursor == LMI_FW);
-        if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
+        if (cursor_here) fill_row_hl(y, row_h);
         nes_font_draw(g_fb, "fw", 4, y, L_COL_DIM);
         int vw = nes_font_width(val);
         nes_font_draw(g_fb, val, 128 - vw - 4, y, L_COL_TEXT);
+        y += row_h;
+    }
+
+    /* Volume — "N/20" + bar. LEFT/RIGHT adjust when cursor here. */
+    {
+        int cursor_here = (cursor == LMI_VOL);
+        if (cursor_here) fill_row_hl(y, row_h);
+        nes_font_draw(g_fb, "vol", 4, y, L_COL_DIM);
+        char val[12];
+        snprintf(val, sizeof(val), "%d/%d", g_menu_volume, THUMBYONE_VOLUME_MAX);
+        int vw = nes_font_width(val);
+        nes_font_draw(g_fb, val, 128 - vw - 4, y,
+                      cursor_here ? L_COL_HIGHLT : L_COL_TEXT);
+        draw_thin_bar(8, y + 7, bar_w, 2,
+                      g_menu_volume, THUMBYONE_VOLUME_MAX,
+                      L_COL_HIGHLT, L_COL_BAR_BG);
+        y += row_h;
+    }
+
+    /* Brightness — "NN%" + bar. LEFT/RIGHT adjust, applied live. */
+    {
+        int cursor_here = (cursor == LMI_BRIGHT);
+        if (cursor_here) fill_row_hl(y, row_h);
+        nes_font_draw(g_fb, "bright", 4, y, L_COL_DIM);
+        int pct = (g_menu_brightness * 100) / THUMBYONE_BRIGHTNESS_MAX;
+        char val[8];
+        snprintf(val, sizeof(val), "%d%%", pct);
+        int vw = nes_font_width(val);
+        nes_font_draw(g_fb, val, 128 - vw - 4, y,
+                      cursor_here ? L_COL_HIGHLT : L_COL_TEXT);
+        draw_thin_bar(8, y + 7, bar_w, 2,
+                      g_menu_brightness, THUMBYONE_BRIGHTNESS_MAX,
+                      L_COL_HIGHLT, L_COL_BAR_BG);
         y += row_h;
     }
 
@@ -756,7 +821,7 @@ static void render_lobby_menu(int cursor) {
     /* Action rows. */
     {
         int cursor_here = (cursor == LMI_CLOSE);
-        if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
+        if (cursor_here) fill_row_hl(y, row_h);
         uint16_t fg = cursor_here ? L_COL_HIGHLT : L_COL_FG;
         if (cursor_here) nes_font_draw(g_fb, ">", 1, y, fg);
         nes_font_draw(g_fb, "close", 8, y, fg);
@@ -784,20 +849,40 @@ static void lobby_menu_seek(int *cursor, int dir) {
     *cursor = start;
 }
 
-/* Run the menu. Always returns false now — the only action is close.
- * Signature kept so the caller's bool plumbing doesn't need to change. */
+/* Run the menu. Returns false (compat: no action paths left besides
+ * close). Loads volume + brightness from /.volume + /.brightness on
+ * open, lets the user nudge them with LEFT/RIGHT when the cursor is
+ * on the VOL / BRIGHT rows, applies brightness live via PWM on every
+ * change, and persists both back to FAT on close ONLY if they moved. */
 static bool lobby_menu_open(void) {
     memcpy(g_menu_backdrop, g_fb, sizeof(g_fb));
     darken_fb_full(g_menu_backdrop);
-    int cursor = LMI_CLOSE;
-    bool prev_up = btn_up_pressed();
-    bool prev_down = btn_down_pressed();
-    bool prev_left = btn_left_pressed();
+
+    /* Snapshot current settings. */
+    g_menu_volume     = thumbyone_settings_load_volume();
+    g_menu_brightness = thumbyone_settings_load_brightness();
+    int initial_vol   = g_menu_volume;
+    int initial_bri   = g_menu_brightness;
+    /* Apply the loaded brightness now — should already match what the
+     * LCD driver set at boot, but be defensive in case anything else
+     * has touched the PWM level since. */
+    thumbyone_backlight_set((uint8_t)g_menu_brightness);
+
+    int cursor = LMI_VOL;   /* land on the first adjustable row */
+    bool prev_up    = btn_up_pressed();
+    bool prev_down  = btn_down_pressed();
+    bool prev_left  = btn_left_pressed();
     bool prev_right = btn_right_pressed();
-    bool prev_a = btn_a_pressed();
-    bool prev_b = btn_b_pressed();
+    bool prev_a    = btn_a_pressed();
+    bool prev_b    = btn_b_pressed();
     bool prev_menu = btn_menu_pressed();
-    (void)prev_left; (void)prev_right;
+
+    /* Autorepeat for slider hold-LEFT / hold-RIGHT: wait 300 ms then
+     * fire every 60 ms. Per memory notes from prior menu work. */
+    const uint32_t AR_DELAY_US = 300u * 1000u;
+    const uint32_t AR_STEP_US  =  60u * 1000u;
+    uint32_t ar_left_next_us  = 0;
+    uint32_t ar_right_next_us = 0;
 
     render_lobby_menu(cursor);
 
@@ -806,6 +891,8 @@ static bool lobby_menu_open(void) {
 
         bool up = btn_up_pressed();
         bool down = btn_down_pressed();
+        bool left  = btn_left_pressed();
+        bool right = btn_right_pressed();
         bool a = btn_a_pressed();
         bool b = btn_b_pressed();
         bool mb = btn_menu_pressed();
@@ -822,10 +909,72 @@ static bool lobby_menu_open(void) {
             if (newc != cursor) { cursor = newc; dirty = true; }
         }
 
-        if (a && !prev_a && cursor == LMI_CLOSE) return false;
-        if ((b && !prev_b) || (mb && !prev_menu)) return false;
+        /* Slider adjustment: LEFT/RIGHT with autorepeat while the
+         * cursor is on an adjustable row. Each adjustment step is
+         * per-row-appropriate (volume: 1, brightness: 12 ≈ 5 %). */
+        uint32_t now_us = (uint32_t)time_us_64();
+        {
+            int step = 0;
+            if (cursor == LMI_VOL)    step = 1;
+            if (cursor == LMI_BRIGHT) step = 12;
+            if (step > 0) {
+                if (left && !prev_left) {
+                    ar_left_next_us = now_us + AR_DELAY_US;
+                    int *v = (cursor == LMI_VOL) ? &g_menu_volume : &g_menu_brightness;
+                    int lo = (cursor == LMI_VOL) ? THUMBYONE_VOLUME_MIN
+                                                 : THUMBYONE_BRIGHTNESS_MIN;
+                    if (*v > lo) { *v -= step; if (*v < lo) *v = lo; dirty = true; }
+                } else if (left && (int32_t)(now_us - ar_left_next_us) >= 0) {
+                    ar_left_next_us = now_us + AR_STEP_US;
+                    int *v = (cursor == LMI_VOL) ? &g_menu_volume : &g_menu_brightness;
+                    int lo = (cursor == LMI_VOL) ? THUMBYONE_VOLUME_MIN
+                                                 : THUMBYONE_BRIGHTNESS_MIN;
+                    if (*v > lo) { *v -= step; if (*v < lo) *v = lo; dirty = true; }
+                }
+            }
+        }
+        {
+            int step = 0;
+            if (cursor == LMI_VOL)    step = 1;
+            if (cursor == LMI_BRIGHT) step = 12;
+            if (step > 0) {
+                if (right && !prev_right) {
+                    ar_right_next_us = now_us + AR_DELAY_US;
+                    int *v  = (cursor == LMI_VOL) ? &g_menu_volume : &g_menu_brightness;
+                    int hi  = (cursor == LMI_VOL) ? THUMBYONE_VOLUME_MAX
+                                                  : THUMBYONE_BRIGHTNESS_MAX;
+                    if (*v < hi) { *v += step; if (*v > hi) *v = hi; dirty = true; }
+                } else if (right && (int32_t)(now_us - ar_right_next_us) >= 0) {
+                    ar_right_next_us = now_us + AR_STEP_US;
+                    int *v  = (cursor == LMI_VOL) ? &g_menu_volume : &g_menu_brightness;
+                    int hi  = (cursor == LMI_VOL) ? THUMBYONE_VOLUME_MAX
+                                                  : THUMBYONE_BRIGHTNESS_MAX;
+                    if (*v < hi) { *v += step; if (*v > hi) *v = hi; dirty = true; }
+                }
+            }
+        }
+        /* Brightness live-apply (no FAT write per click — that would
+         * starve the audio path with f_write latency and also make
+         * the slider feel laggy). FAT write happens once at close. */
+        if (dirty && cursor == LMI_BRIGHT) {
+            thumbyone_backlight_set((uint8_t)g_menu_brightness);
+        }
+        bool close_menu = false;
+        if (a && !prev_a && cursor == LMI_CLOSE) close_menu = true;
+        if ((b && !prev_b) || (mb && !prev_menu)) close_menu = true;
 
-        prev_up = up; prev_down = down; prev_a = a; prev_b = b; prev_menu = mb;
+        if (close_menu) {
+            /* Persist only if something changed — avoids hammering
+             * flash on every menu-open/close. */
+            if (g_menu_volume != initial_vol)
+                thumbyone_settings_save_volume((uint8_t)g_menu_volume);
+            if (g_menu_brightness != initial_bri)
+                thumbyone_settings_save_brightness((uint8_t)g_menu_brightness);
+            return false;
+        }
+
+        prev_up = up; prev_down = down; prev_left = left; prev_right = right;
+        prev_a = a; prev_b = b; prev_menu = mb;
 
         if (dirty) render_lobby_menu(cursor);
         sleep_ms(16);
@@ -911,6 +1060,11 @@ int main(void) {
             sleep_ms(3000);
         }
     }
+
+    /* Apply the saved global brightness (/.brightness) now that the
+     * FAT is mounted. The LCD driver came up at full brightness
+     * during init; this is what takes it to the user-set level. */
+    thumbyone_backlight_set(thumbyone_settings_load_brightness());
 
     /* Bring up USB MSC — single place in the firmware that exposes
      * the shared FAT to a host. Slots never enumerate USB, so this

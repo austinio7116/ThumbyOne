@@ -119,3 +119,29 @@ set(THUMBYONE_COMMON_FS_STATS_SRC
 set(THUMBYONE_COMMON_FS_STATS_INCLUDE
     ${CMAKE_CURRENT_SOURCE_DIR}/lib
     PARENT_SCOPE)
+
+# Shared hardware-PWM backlight driver — GP7 slice 3 channel B,
+# 0..255 with a floor constant so the screen never goes invisible.
+# Consumed by the lobby, the common picker LCD (MPY slot), and
+# NES / P8 LCD drivers under THUMBYONE_SLOT_MODE. NOT used by
+# DOOM — it drives GP7 as a plain GPIO "on" and has no
+# brightness slider.
+set(THUMBYONE_COMMON_BACKLIGHT_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/thumbyone_backlight.c
+    PARENT_SCOPE)
+
+set(THUMBYONE_COMMON_BACKLIGHT_INCLUDE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    PARENT_SCOPE)
+
+# Shared system-wide settings (volume / brightness) — tiny helper
+# that loads + saves /.volume and /.brightness on the shared FAT.
+# Consumed by every slot + lobby; DOOM does NOT use this (no FatFs).
+# Needs FatFs on the consumer's include path (THUMBYONE_FATFS_INCLUDE).
+set(THUMBYONE_COMMON_SETTINGS_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/thumbyone_settings.c
+    PARENT_SCOPE)
+
+set(THUMBYONE_COMMON_SETTINGS_INCLUDE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    PARENT_SCOPE)

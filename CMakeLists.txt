@@ -84,6 +84,8 @@ add_executable(lobby
     ${THUMBYONE_FATFS_SRC}
     ${THUMBYONE_COMMON_BATTERY_SRC}
     ${THUMBYONE_COMMON_FS_STATS_SRC}
+    ${THUMBYONE_COMMON_BACKLIGHT_SRC}
+    ${THUMBYONE_COMMON_SETTINGS_SRC}
 )
 target_include_directories(lobby PRIVATE
     lobby
@@ -92,6 +94,8 @@ target_include_directories(lobby PRIVATE
     ${THUMBYONE_FATFS_INCLUDE}
     ${THUMBYONE_COMMON_BATTERY_INCLUDE}
     ${THUMBYONE_COMMON_FS_STATS_INCLUDE}
+    ${THUMBYONE_COMMON_BACKLIGHT_INCLUDE}
+    ${THUMBYONE_COMMON_SETTINGS_INCLUDE}
 )
 # tusb_config.h lives in lobby/ — put the lobby dir BEFORE the
 # tinyUSB include search so our config is picked up rather than
@@ -104,6 +108,7 @@ target_link_libraries(lobby PRIVATE
     hardware_watchdog
     hardware_gpio
     hardware_pwm
+    hardware_pio    # shared thumbyone_backlight (PIO PWM on GP7)
     hardware_adc
     hardware_spi
     hardware_dma
