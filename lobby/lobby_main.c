@@ -585,41 +585,16 @@ static usb_row_state_t usb_current_row_state(void) {
  * style look as the MPY-slot picker menu.
  * ===================================================================== */
 
-/* --- battery (ADC channel 3 via GPIO 29) --- */
-#define L_BATT_GPIO     29
-#define L_BATT_ADC_CH    3
-#define L_ADC_REF_V    3.3f
-#define L_ADC_MAX     4095
-#define L_HALF_MIN_V  (1.4f + 0.05f)   /* ~2.9 V actual */
-#define L_HALF_MAX_V  (2.0f - 0.15f)   /* ~3.7 V actual */
+/* --- battery ----------------------------------------------------- *
+ * Delegates to common/lib/thumbyone_battery so the lobby's reading
+ * matches every slot (NES, P8, DOOM, MPY picker) to the percentage
+ * point. Previously the lobby's 8-sample average could disagree by
+ * a percent or two with NES's single-sample read on the same pack. */
+#include "thumbyone_battery.h"
 
-static bool g_adc_ready = false;
-static void battery_init(void) {
-    if (g_adc_ready) return;
-    adc_init();
-    adc_gpio_init(L_BATT_GPIO);
-    g_adc_ready = true;
-}
-static float battery_half_voltage(void) {
-    battery_init();
-    adc_select_input(L_BATT_ADC_CH);
-    /* Discard first sample after channel switch — RP2350 quirk. */
-    (void)adc_read();
-    const int N = 8;
-    uint32_t sum = 0;
-    for (int i = 0; i < N; i++) sum += adc_read();
-    return ((float)sum / N) * L_ADC_REF_V / (float)L_ADC_MAX;
-}
-static float battery_voltage(void) { return 2.0f * battery_half_voltage(); }
-static bool  battery_charging(void) { return battery_half_voltage() >= L_HALF_MAX_V; }
-static int   battery_percent(void) {
-    float h = battery_half_voltage();
-    if (h <= L_HALF_MIN_V) return 0;
-    if (h >= L_HALF_MAX_V) return 100;
-    int p = (int)((h - L_HALF_MIN_V) / (L_HALF_MAX_V - L_HALF_MIN_V) * 100.0f + 0.5f);
-    if (p < 0) p = 0; if (p > 100) p = 100;
-    return p;
-}
+static int   battery_percent(void)  { int   p = 0;     thumbyone_battery_read(&p,   NULL, NULL); return p; }
+static float battery_voltage(void)  { float v = 0.0f;  thumbyone_battery_read(NULL, NULL, &v); return v; }
+static bool  battery_charging(void) { bool  c = false; thumbyone_battery_read(NULL, &c,   NULL); return c; }
 
 /* --- disk stats --- */
 static void disk_stats_kb(uint32_t *free_kb, uint32_t *total_kb) {

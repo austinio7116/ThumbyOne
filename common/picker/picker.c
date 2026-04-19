@@ -209,52 +209,17 @@ static bool just_pressed(uint pin, bool *prev) {
     return edge;
 }
 
-/* --- battery (inline — avoids pulling NES slot sources) --------- */
-#define BATT_GPIO     29
-#define BATT_ADC_CH    3
-#define ADC_REF_V    3.3f
-#define ADC_MAX_CNT  4095
-#define HALF_MIN_V   (1.4f + 0.05f)   /* ~2.9 V actual */
-#define HALF_MAX_V   (2.0f - 0.15f)   /* ~3.7 V actual */
+/* --- battery ---------------------------------------------------- *
+ * Delegates to common/lib/thumbyone_battery so the MPY picker's
+ * reading matches the lobby / NES / P8 / DOOM readout exactly. */
+#include "thumbyone_battery.h"
 
-static bool g_adc_ready = false;
-
-static void battery_init(void) {
-    if (g_adc_ready) return;
-    adc_init();
-    adc_gpio_init(BATT_GPIO);
-    g_adc_ready = true;
-}
-
-static float battery_half_voltage(void) {
-    battery_init();
-    adc_select_input(BATT_ADC_CH);
-    /* Discard the first sample after a channel switch — RP2350 ADC
-     * returns the previous channel's in-flight reading. Then take
-     * the average of several more samples so the displayed value
-     * doesn't jitter the last bar pixel every menu tick. Drawing
-     * the bar from a single raw reading makes the length flicker
-     * visibly at the edge. 8 reads at ~96 cycles each is well
-     * under 1 ms, cheap. */
-    (void)adc_read();
-    const int N = 8;
-    uint32_t sum = 0;
-    for (int i = 0; i < N; i++) sum += adc_read();
-    float raw = (float)sum / (float)N;
-    return raw * ADC_REF_V / (float)ADC_MAX_CNT;
-}
-
-static float battery_voltage(void)  { return 2.0f * battery_half_voltage(); }
-static bool  battery_charging(void) { return battery_half_voltage() >= HALF_MAX_V; }
+static float battery_voltage(void)  { float v = 0.0f;  thumbyone_battery_read(NULL, NULL, &v); return v; }
+static bool  battery_charging(void) { bool  c = false; thumbyone_battery_read(NULL, &c,   NULL); return c; }
 static int   battery_percent(void) {
-    float h = battery_half_voltage();
-    if (h <= HALF_MIN_V) return 0;
-    if (h >= HALF_MAX_V) return 100;
-    float frac = (h - HALF_MIN_V) / (HALF_MAX_V - HALF_MIN_V);
-    int pct = (int)(frac * 100.0f + 0.5f);
-    if (pct < 0) pct = 0;
-    if (pct > 100) pct = 100;
-    return pct;
+    int p = 0;
+    thumbyone_battery_read(&p, NULL, NULL);
+    return p;
 }
 
 /* --- screen helpers --------------------------------------------- */

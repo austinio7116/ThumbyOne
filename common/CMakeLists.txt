@@ -93,3 +93,16 @@ set(THUMBYONE_PICKER_INCLUDE
 set(THUMBYONE_PT_JSON
     ${CMAKE_CURRENT_SOURCE_DIR}/pt.json
     PARENT_SCOPE)
+
+# Shared battery helper — ADC sampling + EMA smoothing + percent /
+# charging hysteresis. Consumed by every slot (NES, P8, DOOM, MPY
+# picker) and the lobby so "35% 3.42V" means the same thing
+# everywhere. Pure pico-sdk usage (adc + stdlib) — no FatFs, no
+# display dependency.
+set(THUMBYONE_COMMON_BATTERY_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/thumbyone_battery.c
+    PARENT_SCOPE)
+
+set(THUMBYONE_COMMON_BATTERY_INCLUDE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    PARENT_SCOPE)

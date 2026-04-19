@@ -82,12 +82,14 @@ add_executable(lobby
     ${THUMBYONE_COMMON_SRC}
     ${THUMBYONE_COMMON_FS_SRC}
     ${THUMBYONE_FATFS_SRC}
+    ${THUMBYONE_COMMON_BATTERY_SRC}
 )
 target_include_directories(lobby PRIVATE
     lobby
     ${THUMBYONE_PICKER_INCLUDE}
     ${THUMBYONE_COMMON_INCLUDE}
     ${THUMBYONE_FATFS_INCLUDE}
+    ${THUMBYONE_COMMON_BATTERY_INCLUDE}
 )
 # tusb_config.h lives in lobby/ — put the lobby dir BEFORE the
 # tinyUSB include search so our config is picked up rather than
