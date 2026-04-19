@@ -3,7 +3,7 @@
 ## The One Firmware
 
 > *One firmware to rule them all, one lobby to find them.*
-> *One UF2 to bring them all, and in the Thumby bind them.*
+> *One file to bring them all, and in the Thumby bind them.*
 
 ThumbyOne is a unified multi-boot firmware for the [TinyCircuits Thumby Color](https://thumby.us/) — the pocketable colour handheld with a 128×128 screen and a pair of buttons that somehow play Doom. One flash gives you **NES**, **Master System**, **Game Gear**, **Game Boy**, **PICO-8**, **DOOM**, and the full **MicroPython + Tiny Game Engine** experience, each running with the whole device to itself.
 
