@@ -34,6 +34,10 @@ No per-system re-flashing. No "which firmware is this device running?" No re-for
 
 ---
 
+## What's new in 1.03
+
+- **MicroPython games exit cleanly back to the picker.** If a game calls `sys.exit()`, `engine.end()`, raises an uncaught exception, or simply returns from `main.py`, the slot now reboots straight back into the MicroPython game picker instead of hanging on a dead REPL. Previously the device appeared frozen until you power-cycled it.
+
 ## What's new in 1.02
 
 System-wide controls, consistent across every menu:
