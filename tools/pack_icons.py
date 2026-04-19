@@ -63,6 +63,13 @@ def load_as_indexed(path: str) -> tuple[list[int], list[int]]:
     qimg = img.quantize(colors=NCOL, method=Image.MEDIANCUT, dither=Image.NONE)
 
     pal_raw = qimg.getpalette()                    # [r,g,b, r,g,b, ...]
+    # Pillow may return fewer than NCOL palette entries when the
+    # source image has only a handful of unique colours (e.g. a
+    # two-tone line-art icon). Pad with black so downstream always
+    # gets exactly NCOL entries.
+    needed = NCOL * 3
+    if len(pal_raw) < needed:
+        pal_raw = list(pal_raw) + [0] * (needed - len(pal_raw))
     palette = []
     for i in range(NCOL):
         r, g, b = pal_raw[i * 3:i * 3 + 3]

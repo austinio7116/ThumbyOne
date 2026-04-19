@@ -793,51 +793,10 @@ static void render_hero(int sel) {
 
 /* --- menu overlay ------------------------------------------------ */
 
-/* Compute free / total KB on the shared FAT. Best-effort — on
- * error, returns zeroes and the row renders as "?". */
-static void disk_stats_kb(uint32_t *free_kb, uint32_t *total_kb) {
-    *free_kb = 0;
-    *total_kb = 0;
-    FATFS *fs = NULL;
-    DWORD free_clust = 0;
-    if (f_getfree("/", &free_clust, &fs) != FR_OK || !fs) return;
-    /* FatFs R0.15: total sectors = (n_fatent - 2) * csize, and
-     * free = free_clust * csize. Sector size = 512 for all FAT
-     * volumes formatted by the lobby. */
-    uint32_t csize = fs->csize;
-    uint32_t total_sectors = (fs->n_fatent - 2) * csize;
-    uint32_t free_sectors  = free_clust * csize;
-    *total_kb = (uint32_t)((uint64_t)total_sectors * 512 / 1024);
-    *free_kb  = (uint32_t)((uint64_t)free_sectors  * 512 / 1024);
-}
-
-/* Format a KB count as "X.YMB" if >= 1024 else "XKB". Writes to
- * a caller buffer (>= 10 chars). */
-static void fmt_kb(char *out, size_t cap, uint32_t kb) {
-    if (cap < 8) { if (cap) *out = '\0'; return; }
-    if (kb >= 1024) {
-        /* One decimal place: KB/100 gives tenths of MB. */
-        uint32_t whole = kb / 1024;
-        uint32_t tenths = (kb % 1024) * 10 / 1024;
-        char b1[8], b2[4];
-        int_to_str((int)whole, b1);
-        int_to_str((int)tenths, b2);
-        size_t n = strlen(b1);
-        if (n + 1 + strlen(b2) + 2 + 1 > cap) return;
-        memcpy(out, b1, n);
-        out[n++] = '.';
-        memcpy(out + n, b2, strlen(b2));
-        n += strlen(b2);
-        memcpy(out + n, "MB", 3);   /* includes NUL */
-    } else {
-        char b1[8];
-        int_to_str((int)kb, b1);
-        size_t n = strlen(b1);
-        if (n + 3 > cap) return;
-        memcpy(out, b1, n);
-        memcpy(out + n, "KB", 3);
-    }
-}
+/* Disk-usage query + formatting live in the shared helper so the
+ * MPY picker's "2.3M/9.6M" row matches the lobby / NES / P8 picker
+ * menus to the byte. */
+#include "thumbyone_fs_stats.h"
 
 /* In-place darken the framebuffer to ~1/4 brightness, per-channel.
  * Copy of ThumbyNES nes_menu.c's darken_fb — kept verbatim so the
@@ -917,23 +876,16 @@ static void menu_build_batt_row(menu_row_render_t *r) {
 }
 
 static void menu_build_disk_row(menu_row_render_t *r) {
-    uint32_t fk = 0, tk = 0;
-    disk_stats_kb(&fk, &tk);
-    char fv[10], tv[10];
-    fmt_kb(fv, sizeof(fv), fk);
-    fmt_kb(tv, sizeof(tv), tk);
-    size_t n = strlen(fv);
-    if (n + 1 + strlen(tv) >= sizeof(r->val)) n = 0;
-    memcpy(r->val, fv, n);
-    r->val[n++] = '/';
-    size_t tl = strlen(tv);
-    if (n + tl >= sizeof(r->val)) tl = sizeof(r->val) - n - 1;
-    memcpy(r->val + n, tv, tl); r->val[n + tl] = 0;
-    r->val_col   = COL_TEXT;
-    /* Bar shows free fraction (fuller bar = more free space). */
-    r->bar_value = (int)fk;
+    uint64_t used_b = 0, total_b = 0;
+    thumbyone_fs_get_usage(&used_b, NULL, &total_b);
+    thumbyone_fs_fmt_used_total(used_b, total_b, r->val, sizeof(r->val));
+    r->val_col = COL_TEXT;
+    /* Bar direction matches the text: fills with used (fuller bar
+     * = less free space). KB-scaled to fit bar_value's int range
+     * with plenty of headroom on our 9.6 MB volume. */
+    r->bar_value = (int)(used_b  / 1024);
     r->bar_min   = 0;
-    r->bar_max   = (tk > 0) ? (int)tk : 1;
+    r->bar_max   = total_b > 0 ? (int)(total_b / 1024) : 1;
 }
 
 static void menu_build_by_row(menu_row_render_t *r) {

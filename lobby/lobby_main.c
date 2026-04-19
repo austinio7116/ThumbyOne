@@ -596,18 +596,11 @@ static int   battery_percent(void)  { int   p = 0;     thumbyone_battery_read(&p
 static float battery_voltage(void)  { float v = 0.0f;  thumbyone_battery_read(NULL, NULL, &v); return v; }
 static bool  battery_charging(void) { bool  c = false; thumbyone_battery_read(NULL, &c,   NULL); return c; }
 
-/* --- disk stats --- */
-static void disk_stats_kb(uint32_t *free_kb, uint32_t *total_kb) {
-    *free_kb = 0; *total_kb = 0;
-    FATFS *fs = NULL;
-    DWORD free_clust = 0;
-    if (f_getfree("/", &free_clust, &fs) != FR_OK || !fs) return;
-    uint32_t csize = fs->csize;
-    uint32_t total_sectors = (fs->n_fatent - 2) * csize;
-    uint32_t free_sectors  = free_clust * csize;
-    *total_kb = (uint32_t)((uint64_t)total_sectors * 512 / 1024);
-    *free_kb  = (uint32_t)((uint64_t)free_sectors  * 512 / 1024);
-}
+/* Disk-usage querying + formatting lives in
+ * common/lib/thumbyone_fs_stats so every place that shows the
+ * shared-FAT figures ("X.XM/Y.YM" + progress bar) agrees on the
+ * numbers and on bar direction (fill = used). */
+#include "thumbyone_fs_stats.h"
 
 /* --- menu palette (NES-style) --- */
 #define L_COL_BG       0x0000
@@ -626,13 +619,12 @@ typedef enum {
     LMI_DISK,
     LMI_USB,
     LMI_FW,
-    LMI_REBOOT,
     LMI_CLOSE,
     LMI_COUNT,
 } lobby_menu_item_t;
 
 static bool lobby_menu_item_selectable(lobby_menu_item_t it) {
-    return it == LMI_REBOOT || it == LMI_CLOSE;
+    return it == LMI_CLOSE;
 }
 
 /* Scratch backdrop used while the menu is up — captured at open,
@@ -661,17 +653,6 @@ static void draw_thin_bar(int x, int y, int w, int h,
     for (int yy = y; yy < y + h; ++yy)
         for (int xx = x; xx < x + fill_w; ++xx)
             g_fb[yy * 128 + xx] = fg;
-}
-
-static void fmt_kb(char *out, size_t cap, uint32_t kb) {
-    if (cap < 8) { if (cap) *out = 0; return; }
-    if (kb >= 1024) {
-        uint32_t whole = kb / 1024;
-        uint32_t tenths = (kb % 1024) * 10 / 1024;
-        snprintf(out, cap, "%u.%uMB", (unsigned)whole, (unsigned)tenths);
-    } else {
-        snprintf(out, cap, "%uKB", (unsigned)kb);
-    }
 }
 
 #ifndef THUMBYONE_FW_VERSION
@@ -718,23 +699,23 @@ static void render_lobby_menu(int cursor) {
         y += row_h;
     }
 
-    /* Disk */
+    /* Disk — "USED / TOTAL" text, bar fills with used. */
     {
-        uint32_t free_kb = 0, total_kb = 0;
-        disk_stats_kb(&free_kb, &total_kb);
-        char fv[10], tv[10];
-        fmt_kb(fv, sizeof(fv), free_kb);
-        fmt_kb(tv, sizeof(tv), total_kb);
+        uint64_t used_b = 0, total_b = 0;
+        thumbyone_fs_get_usage(&used_b, NULL, &total_b);
         char val[24];
-        snprintf(val, sizeof(val), "%s/%s", fv, tv);
+        thumbyone_fs_fmt_used_total(used_b, total_b, val, sizeof(val));
         int cursor_here = (cursor == LMI_DISK);
         if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
         nes_font_draw(g_fb, "disk", 4, y, L_COL_DIM);
         int vw = nes_font_width(val);
         nes_font_draw(g_fb, val, 128 - vw - 4, y, L_COL_TEXT);
+        /* Bar range is KB (fits in int for our 9.6 MB volume). */
+        int used_kb  = (int)(used_b  / 1024);
+        int total_kb = (int)(total_b / 1024);
         draw_thin_bar(8, y + 7, bar_w, 2,
-                      (int)free_kb,
-                      total_kb > 0 ? (int)total_kb : 1,
+                      used_kb,
+                      total_kb > 0 ? total_kb : 1,
                       L_COL_HIGHLT, L_COL_BAR_BG);
         y += row_h;
     }
@@ -773,25 +754,20 @@ static void render_lobby_menu(int cursor) {
     y += 4;
 
     /* Action rows. */
-    const char *labels[] = {
-        [LMI_REBOOT] = "reboot lobby",
-        [LMI_CLOSE]  = "close",
-    };
-    for (int i = LMI_REBOOT; i < LMI_COUNT; ++i) {
-        int cursor_here = (cursor == i);
+    {
+        int cursor_here = (cursor == LMI_CLOSE);
         if (cursor_here) for (int xx = 0; xx < 128; ++xx) g_fb[(y - 1) * 128 + xx] = L_COL_HL_BG;
         uint16_t fg = cursor_here ? L_COL_HIGHLT : L_COL_FG;
         if (cursor_here) nes_font_draw(g_fb, ">", 1, y, fg);
-        nes_font_draw(g_fb, labels[i], 8, y, fg);
+        nes_font_draw(g_fb, "close", 8, y, fg);
         y += row_h;
     }
 
     /* Footer. */
     for (int xx = 0; xx < 128; ++xx) g_fb[120 * 128 + xx] = L_COL_MENU_TITLE;
     const char *hint =
-        (cursor == LMI_REBOOT) ? "A: reboot" :
-        (cursor == LMI_CLOSE)  ? "A: close"  :
-                                 "A: select  B: close";
+        (cursor == LMI_CLOSE) ? "A: close"
+                               : "A: select  B: close";
     int hw = nes_font_width(hint);
     nes_font_draw(g_fb, hint, (128 - hw) / 2, 122, L_COL_DIM);
 
@@ -808,11 +784,12 @@ static void lobby_menu_seek(int *cursor, int dir) {
     *cursor = start;
 }
 
-/* Run the menu. Returns true if user picked Reboot; false on close. */
+/* Run the menu. Always returns false now — the only action is close.
+ * Signature kept so the caller's bool plumbing doesn't need to change. */
 static bool lobby_menu_open(void) {
     memcpy(g_menu_backdrop, g_fb, sizeof(g_fb));
     darken_fb_full(g_menu_backdrop);
-    int cursor = LMI_REBOOT;
+    int cursor = LMI_CLOSE;
     bool prev_up = btn_up_pressed();
     bool prev_down = btn_down_pressed();
     bool prev_left = btn_left_pressed();
@@ -845,10 +822,7 @@ static bool lobby_menu_open(void) {
             if (newc != cursor) { cursor = newc; dirty = true; }
         }
 
-        if (a && !prev_a) {
-            if (cursor == LMI_REBOOT) return true;
-            if (cursor == LMI_CLOSE)  return false;
-        }
+        if (a && !prev_a && cursor == LMI_CLOSE) return false;
         if ((b && !prev_b) || (mb && !prev_menu)) return false;
 
         prev_up = up; prev_down = down; prev_a = a; prev_b = b; prev_menu = mb;
@@ -1046,24 +1020,17 @@ int main(void) {
                 /* Wait for release so MENU-press is distinct from
                  * a MENU-held-at-boot recovery. */
                 while (btn_menu_pressed()) { lobby_usb_task(); sleep_ms(5); }
-                if (lobby_menu_open()) {
-                    /* User picked "Reboot lobby" — set the pending
-                     * slot and let the main debounce do the rest. */
-                    pending_slot = -2;
-                    pending_since_us = (uint64_t)time_us_64();
-                } else {
-                    /* Menu closed via MENU/B/close. Wait for ALL
-                     * input buttons to be released so the same
-                     * press that closed the menu doesn't get
-                     * re-read by the outer loop (MENU would
-                     * immediately re-open it, A-on-close would
-                     * then launch the cursor tile). */
-                    while (btn_menu_pressed() || btn_a_pressed() ||
-                           btn_b_pressed()) {
-                        lobby_usb_task(); sleep_ms(5);
-                    }
-                    render_home();
+                (void)lobby_menu_open();
+                /* Menu closed via MENU/B/close. Wait for ALL
+                 * input buttons to be released so the same press
+                 * that closed the menu doesn't get re-read by the
+                 * outer loop (MENU would immediately re-open it,
+                 * A-on-close would then launch the cursor tile). */
+                while (btn_menu_pressed() || btn_a_pressed() ||
+                       btn_b_pressed()) {
+                    lobby_usb_task(); sleep_ms(5);
                 }
+                render_home();
             }
         }
 

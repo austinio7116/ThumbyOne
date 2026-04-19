@@ -106,3 +106,16 @@ set(THUMBYONE_COMMON_BATTERY_SRC
 set(THUMBYONE_COMMON_BATTERY_INCLUDE
     ${CMAKE_CURRENT_SOURCE_DIR}/lib
     PARENT_SCOPE)
+
+# Shared shared-FAT disk-usage helper — f_getfree wrapper + compact
+# "X.XM/Y.YM" formatter. Consumed by anything that shows disk usage
+# (lobby, NES picker menu, P8 picker menu, MPY picker menu). DOOM
+# doesn't use it — it has no FatFs. Needs THUMBYONE_FATFS_INCLUDE
+# already on the consumer's include path (for ff.h).
+set(THUMBYONE_COMMON_FS_STATS_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/thumbyone_fs_stats.c
+    PARENT_SCOPE)
+
+set(THUMBYONE_COMMON_FS_STATS_INCLUDE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    PARENT_SCOPE)
