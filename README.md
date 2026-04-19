@@ -34,6 +34,37 @@ No per-system re-flashing. No "which firmware is this device running?" No re-for
 
 ---
 
+## What's new in 1.02
+
+System-wide controls, consistent across every menu:
+
+- **Global volume and brightness.** The lobby MENU overlay gets two new sliders — `VOLUME` and `BRIGHTNESS`. Set them once, they apply to every slot on launch: NES, SMS, GG, Game Boy, PICO-8, DOOM and every MicroPython game pick up the same values. Change volume inside any slot's menu and the lobby shows the new value next time you back out.
+- **Brightness sliders in every slot menu.** ThumbyNES picker + in-game pause, ThumbyP8 picker + in-game pause, and the MicroPython picker all have a live brightness slider now — the backlight PWM tracks while you slide.
+- **DOOM honours the system volume and brightness** too. On launch DOOM picks up whatever the lobby was set to; its own pause menu still works as a session-level override.
+- **Consistent widgets**: thick right-aligned outlined slider across the lobby + every slot menu, press-and-hold autorepeat with identical timing everywhere (300 ms warm-up, 60 ms cadence), and every slider takes ~20 clicks end-to-end regardless of its internal range. Full-row highlighted cursor band in the lobby (used to be a hairline).
+- **"Back to lobby" and "Quit to picker" are always the LAST menu item.** Press UP once from the top of any menu to wrap straight to back-out — the muscle-memory shortcut.
+
+Cleanups:
+
+- **No more "checking files" / "DEFRAGMENTING" flashes** on every NES launch. The auto-defrag was unreliable and fired unnecessarily; it's gone.
+- **Lobby MENU tidied**. The old "Reboot lobby" action is gone (it was occasionally landing in a random slot) — close the menu via B / MENU / A-on-Close.
+- **NES picker menu tidied**. Dead "Defragment now" action removed.
+- **Minimum brightness lowered** (FLOOR 25 → 5, about 2 % duty). Room to dim the screen further for dark-room play without letting a slider set 0 = invisible.
+- **Consistent disk display**. Every menu with a disk row reads "`X.XM / Y.YM`" used / total with the bar filling with used; previously the direction and formatting varied slot-to-slot.
+- **Consistent battery readout**. One shared sampler (16-sample trimmed mean + EMA + ±2 % percent hysteresis) — the number stays put, stops flickering, and reads the same on every screen that shows it.
+
+Under-the-hood fixes that you might notice:
+
+- **DOOM no longer slows down** after saving a game or opening the LB+RB overlay menu — a flash-write bug that left the chip in slow-XIP mode has been fixed.
+- **NES + P8 brightness actually applies.** Those slots share a PWM slice with their audio output, so the old hardware-PWM backlight was overwritten on every audio sample. The shared backlight driver now uses PIO PWM on a dedicated state machine; audio can't touch it.
+- **MicroPython: no bright-frame flash** between menu redraws in the picker.
+
+Storage format: system settings (volume + brightness) live in a single 4 KB flash sector — readable by every slot including DOOM, written only when you move a slider and close the menu.
+
+See the [MENU overlay](#the-lobby) and per-slot menus for the slider rows; the [technical notes](#per-slot-architecture) explain the flash layout for curious readers.
+
+---
+
 ## What you get
 
 | System | What it plays | Content goes in |
@@ -126,9 +157,11 @@ The lobby is the home screen. It's a 2×2 grid of system icons: NES, PICO-8, DOO
 |---|---|
 | D-pad | Move selection between the four tiles |
 | **A** | Launch the selected system |
-| **MENU** | Open the lobby overlay (battery, disk, USB, firmware, reboot) |
+| **MENU** | Open the lobby overlay (volume + brightness sliders, battery, disk, USB, firmware) |
 | **MENU** (held at boot) | Force lobby (bypass any pending slot chain) |
 | **LB + RB** (held at boot) | Wipe and reformat the shared FAT |
+
+Inside the MENU overlay, **LEFT / RIGHT** adjusts the highlighted slider (brightness or volume). Changes apply live — the backlight dims as you scrub — and persist to the shared FAT so every slot picks them up on the next launch.
 
 **Getting back to the lobby** depends on which slot you're in — each system has a native pause / picker menu with a **Back to lobby** item:
 
@@ -143,9 +176,9 @@ A small **USB** label + LED dot in the top-right corner of the lobby — and the
 
 | On-screen dot | Physical LED | Meaning |
 |---|---|---|
-| dim grey | green | USB cable not connected (idle) |
-| blue | blue | Host has mounted the drive — safe to drop files |
-| red | red | Transfer in flight — **do not unplug** |
+| green | green | USB cable not connected (idle) |
+| blue  | blue  | Host has mounted the drive — safe to drop files |
+| red   | red   | Transfer in flight — **do not unplug** |
 
 The physical LED mirrors the on-screen dot so you can see at a glance whether a transfer is still happening even without looking at the screen. When a copy finishes the LED settles back to blue; when you eject or unplug, it goes back to green.
 
@@ -401,7 +434,8 @@ Hold **LB + RB** at boot, hold them through the countdown — fresh FAT, pristin
               rom_chain      ─┤│  0x120000  ──── P8  slot  (512 KB)  │
               image →         ││  0x1A0000  ──── DOOM slot (2.5 MB)  │
               chosen slot     ││  0x420000  ──── MPY slot  (2 MB)    │
-                              ││  0x620000  ──── P8 active-cart (256 KB) │
+                              ││  0x620000  ──── P8 active-cart (252 KB) │
+                              ││  0x65F000  ──── Settings sector (4 KB)  │
                                │  0x660000  ──── Shared FAT (9.6 MB) │
                               ─┤                                     │
                                │  (NES/P8/DOOM/MPY all mount the     │
@@ -429,7 +463,8 @@ No two slots are in memory at the same time. Each slot has the whole 520 KB SRAM
 | P8         | `0x120000` | 512 KB  | `0x10120000`    | ThumbyP8 firmware |
 | DOOM       | `0x1A0000` | 2.5 MB  | `0x101A0000`    | ThumbyDOOM + shareware WAD |
 | MPY        | `0x420000` | 2 MB    | `0x10420000`    | MicroPython + engine + 768 KB resource scratch |
-| P8 scratch | `0x620000` | 256 KB  | `0x10620000`    | P8 active-cart working area (survives reboots into other slots) |
+| P8 scratch | `0x620000` | 252 KB  | `0x10620000`    | P8 active-cart working area (survives reboots into other slots) |
+| Settings sector | `0x65F000` | 4 KB | `0x1065F000`    | System-wide volume + brightness. 8-byte header (`TSM1` magic + two bytes), rest is `0xFF`. Written by the lobby + any slot menu that moves a slider; read by every slot (including DOOM) via XIP — no FatFs required. |
 | Shared FAT | `0x660000` | 9.6 MB  | `0x10660000`    | `/roms`, `/carts`, `/games`, `/Saves`, `/.favs`, `/.active_game` |
 
 Canonical source: [`common/slot_layout.h`](common/slot_layout.h). Keep it in lock-step with [`common/pt.json`](common/pt.json), which is the partition table consumed by the RP2350 bootrom.
@@ -643,7 +678,17 @@ Bolting a pre-Python C picker onto MicroPython has a cost: the picker's framebuf
 - **One-slot-at-a-time residency** — MPY gets the full 520 KB SRAM when running; no co-residency with NES / P8 / DOOM, so the MicroPython heap doesn't have to be pre-partitioned around sibling VMs.
 - **`/system/` assets stay in XIP** — fonts, splash graphics, launcher art all served from `.rodata` by `thumbyone_rom_vfs.c`, never copied into RAM. Cumulative saving: 376 KB of files that would otherwise live on the FAT and, if `in_ram=True`, in SRAM too.
 
-**Measured impact (v1.01):** MPY-slot BSS went from 123 KB to 13 KB — a ~108 KB net reclaim to the MicroPython GC heap. Enough to unblock games that import-heavy at startup (Thumbalaga was hitting MemoryError on its 30th `import` under v1.0 but not under stock firmware; v1.01 matches stock).
+**Measured impact (v1.01+):** the ThumbyOne MPY slot now ships with **more MicroPython heap than stock firmware** — not just parity. Straight from the linker map (`firmware.elf.map`, `__GcHeapStart` to `__GcHeapEnd`):
+
+| Build | BSS end | MicroPython GC heap |
+|---|---|---:|
+| Stock Thumby Color firmware | `0x2002e8b8` (~186 KB BSS) | **~197 KB** (`0x2004dcb8..0x2007f000`) |
+| ThumbyOne MPY slot | `0x2000cbe4` (~51 KB BSS) | **~332 KB** (`0x2002bfe4..0x2007f000`) |
+| **Delta** | −135 KB BSS | **+135 KB (~1.68× stock)** |
+
+Both builds reserve the same 128 KB MicroPython C heap (libc `malloc`) and the same 4 KB extra stack. The difference is pure BSS → GC-heap reclaim. The lobby owning USB (no tinyUSB in the slot), the `.picker_scratch` section overlapping `__GcHeapStart`, ROM-backed `/system/`, and no co-tenant pre-partitioning each pay into that ~135 KB.
+
+That extra heap is what unblocked import-heavy startup cases like Thumbalaga (MemoryError on its 30th `import` under stock; fine under ThumbyOne).
 
 ## Lobby architecture
 

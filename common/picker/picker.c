@@ -47,7 +47,7 @@
  * -DTHUMBYONE_FW_VERSION=\"abc1234\". Fallback is a short marker so
  * the info strip always has something to show. */
 #ifndef THUMBYONE_FW_VERSION
-#define THUMBYONE_FW_VERSION "1.01"
+#define THUMBYONE_FW_VERSION "1.02"
 #endif
 
 /* --- button pins (match engine_io_rp3.h) ------------------------- */
@@ -161,15 +161,18 @@ typedef enum {
     MI_FW,
     /* Selectable rows. */
     MI_SORT,
-    MI_LOBBY,
+    MI_VOL,       /* slider: LEFT/RIGHT adjusts /.volume */
+    MI_BRIGHT,    /* slider: LEFT/RIGHT adjusts /.brightness (live) */
     MI_CLOSE,
+    MI_LOBBY,     /* LAST — "press UP from top to wrap to back-out" */
     MI_COUNT,
 } menu_item_t;
 
 /* Is this row picker-cursor-selectable? */
 static bool menu_item_selectable(menu_item_t it) {
     switch (it) {
-    case MI_SORT: case MI_LOBBY: case MI_CLOSE: return true;
+    case MI_SORT: case MI_VOL: case MI_BRIGHT:
+    case MI_LOBBY: case MI_CLOSE: return true;
     default: return false;
     }
 }
@@ -924,17 +927,53 @@ static void menu_build_fw_row(menu_row_render_t *r) {
 
 static const char *menu_label(menu_item_t it) {
     switch (it) {
-    case MI_BATT:  return "batt";
-    case MI_DISK:  return "disk";
-    case MI_BY:    return "by";
-    case MI_FW:    return "fw";
-    case MI_SORT:  return "sort";
-    case MI_LOBBY: return "back to lobby";
-    case MI_CLOSE: return "close";
-    case MI_COUNT: return "";
+    case MI_BATT:   return "batt";
+    case MI_DISK:   return "disk";
+    case MI_BY:     return "by";
+    case MI_FW:     return "fw";
+    case MI_SORT:   return "sort";
+    case MI_VOL:    return "VOLUME";
+    case MI_BRIGHT: return "BRIGHTNESS";
+    case MI_LOBBY:  return "back to lobby";
+    case MI_CLOSE:  return "close";
+    case MI_COUNT:  return "";
     }
     return "";
 }
+
+/* Thick right-aligned outlined slider — matches the lobby MENU
+ * overlay's volume/brightness widget and the NES/P8 slot menu
+ * slider. Used for MI_VOL / MI_BRIGHT rows in the MPY picker menu
+ * so all three menu systems (lobby + slot in-game + MPY picker)
+ * render the same adjustable-value affordance. */
+static void draw_thick_slider(int x, int y, int w, int h,
+                              int value, int vmax,
+                              uint16_t fg, uint16_t bg) {
+    for (int yy = y; yy < y + h; ++yy)
+        for (int xx = x; xx < x + w; ++xx)
+            g_fb[yy * 128 + xx] = bg;
+    for (int i = 0; i < w; ++i) {
+        g_fb[y * 128 + x + i] = fg;
+        g_fb[(y + h - 1) * 128 + x + i] = fg;
+    }
+    for (int j = 0; j < h; ++j) {
+        g_fb[(y + j) * 128 + x] = fg;
+        g_fb[(y + j) * 128 + x + w - 1] = fg;
+    }
+    if (vmax <= 0) return;
+    int v = value < 0 ? 0 : (value > vmax ? vmax : value);
+    int fill_w = ((w - 2) * v) / vmax;
+    for (int j = 0; j < h - 2; ++j)
+        for (int i = 0; i < fill_w; ++i)
+            g_fb[(y + 1 + j) * 128 + (x + 1 + i)] = fg;
+}
+
+/* Live in-menu values for the slider rows. Loaded at menu-open
+ * from /.volume + /.brightness. Saved back on close if moved. */
+static int g_menu_vol = 0;
+static int g_menu_bri = 0;
+static int g_menu_vol_initial = 0;
+static int g_menu_bri_initial = 0;
 
 static void render_menu(int sel) {
     /* Synthesise the backdrop: re-render the hero into g_fb, then
@@ -985,10 +1024,28 @@ static void render_menu(int sel) {
             row.val[sizeof(row.val) - 1] = 0;
             row.val_col = fg;
             break;
+        case MI_VOL:
+        case MI_BRIGHT:
+            /* Rendered below with a thick right-aligned slider —
+             * no row.val text, no thin bar. */
+            break;
         case MI_LOBBY:
         case MI_CLOSE:
         case MI_COUNT:
             break;
+        }
+
+        /* Thick right-aligned slider for MI_VOL / MI_BRIGHT.
+         * Matches the lobby MENU overlay + the NES/P8 slot menus
+         * so all three systems show the same widget. */
+        if (i == MI_VOL) {
+            draw_thick_slider(128 - 32, y + 1, 28, M_ROW_H - 2,
+                              g_menu_vol, THUMBYONE_VOLUME_MAX,
+                              fg, COL_BAR_BG);
+        } else if (i == MI_BRIGHT) {
+            draw_thick_slider(128 - 32, y + 1, 28, M_ROW_H - 2,
+                              g_menu_bri, THUMBYONE_BRIGHTNESS_MAX,
+                              fg, COL_BAR_BG);
         }
 
         /* Value text aligned to the right of the row. Cursor row
@@ -1017,10 +1074,12 @@ static void render_menu(int sel) {
     fb_rect(0, 128 - M_FOOTER_H, 128, 1, COL_TITLE);
     const char *hint;
     switch ((menu_item_t)g_menu_cursor) {
-    case MI_SORT:  hint = "<> sort  A cycle"; break;
-    case MI_LOBBY: hint = "A return to lobby"; break;
-    case MI_CLOSE: hint = "A close";           break;
-    default:       hint = "A select  B close"; break;
+    case MI_SORT:   hint = "<> sort  A cycle";  break;
+    case MI_VOL:    hint = "<> adjust";         break;
+    case MI_BRIGHT: hint = "<> adjust";         break;
+    case MI_LOBBY:  hint = "A return to lobby"; break;
+    case MI_CLOSE:  hint = "A close";           break;
+    default:        hint = "A select  B close"; break;
     }
     int hw = nes_font_width(hint);
     nes_font_draw(g_fb, hint, (128 - hw) / 2,
@@ -1134,17 +1193,83 @@ int thumbyone_picker_run(void) {
         bool dirty = false;
 
         if (g_menu_open) {
-            /* --- menu input --- */
-            if (just_pressed(PIN_UP, &prev_up) ||
-                just_pressed(PIN_LEFT, &prev_left)) {
+            /* --- menu input ---
+             * On slider rows (MI_VOL / MI_BRIGHT): LEFT/RIGHT adjust
+             * the slider value with autorepeat (same 300/60 ms
+             * timing as the lobby + NES/P8 slot menus). On other
+             * rows: LEFT/RIGHT is treated as cursor navigation so
+             * you can still use it for consistency with the hero
+             * view. UP/DOWN always navigates. */
+            bool on_slider = (g_menu_cursor == MI_VOL ||
+                              g_menu_cursor == MI_BRIGHT);
+            bool lt_edge = just_pressed(PIN_LEFT,  &prev_left);
+            bool rt_edge = just_pressed(PIN_RIGHT, &prev_right);
+
+            /* Autorepeat book-keeping for LEFT/RIGHT when on slider. */
+            static uint32_t ar_lt_next_us = 0;
+            static uint32_t ar_rt_next_us = 0;
+            const uint32_t AR_DELAY_US = 300u * 1000u;
+            const uint32_t AR_STEP_US  =  60u * 1000u;
+            uint32_t now_us = (uint32_t)time_us_64();
+            bool lt_rep = false, rt_rep = false;
+            if (on_slider) {
+                bool lt_held = !gpio_get(PIN_LEFT);
+                bool rt_held = !gpio_get(PIN_RIGHT);
+                if (lt_edge) ar_lt_next_us = now_us + AR_DELAY_US;
+                if (rt_edge) ar_rt_next_us = now_us + AR_DELAY_US;
+                if (lt_held && !lt_edge && (int32_t)(now_us - ar_lt_next_us) >= 0) {
+                    lt_rep = true; ar_lt_next_us = now_us + AR_STEP_US;
+                }
+                if (rt_held && !rt_edge && (int32_t)(now_us - ar_rt_next_us) >= 0) {
+                    rt_rep = true; ar_rt_next_us = now_us + AR_STEP_US;
+                }
+            }
+
+            if (just_pressed(PIN_UP, &prev_up)) {
                 menu_cursor_seek(-1);
                 dirty = true;
             }
-            if (just_pressed(PIN_DOWN, &prev_down) ||
-                just_pressed(PIN_RIGHT, &prev_right)) {
+            if (just_pressed(PIN_DOWN, &prev_down)) {
                 menu_cursor_seek(+1);
                 dirty = true;
             }
+
+            if (lt_edge || lt_rep) {
+                if (g_menu_cursor == MI_VOL) {
+                    if (g_menu_vol > 0) { g_menu_vol--; dirty = true; }
+                } else if (g_menu_cursor == MI_BRIGHT) {
+                    int step = 12;
+                    if (g_menu_bri > 0) {
+                        g_menu_bri -= step;
+                        if (g_menu_bri < 0) g_menu_bri = 0;
+                        /* Live-apply brightness so the user sees the
+                         * dim/brighten as they slide. */
+                        thumbyone_backlight_set((uint8_t)g_menu_bri);
+                        dirty = true;
+                    }
+                } else if (lt_edge) {
+                    /* Non-slider rows: LEFT acts as UP for nav. */
+                    menu_cursor_seek(-1);
+                    dirty = true;
+                }
+            }
+            if (rt_edge || rt_rep) {
+                if (g_menu_cursor == MI_VOL) {
+                    if (g_menu_vol < THUMBYONE_VOLUME_MAX) { g_menu_vol++; dirty = true; }
+                } else if (g_menu_cursor == MI_BRIGHT) {
+                    int step = 12;
+                    if (g_menu_bri < THUMBYONE_BRIGHTNESS_MAX) {
+                        g_menu_bri += step;
+                        if (g_menu_bri > THUMBYONE_BRIGHTNESS_MAX) g_menu_bri = THUMBYONE_BRIGHTNESS_MAX;
+                        thumbyone_backlight_set((uint8_t)g_menu_bri);
+                        dirty = true;
+                    }
+                } else if (rt_edge) {
+                    menu_cursor_seek(+1);
+                    dirty = true;
+                }
+            }
+
             if (just_pressed(PIN_A, &prev_a)) {
                 switch ((menu_item_t)g_menu_cursor) {
                 case MI_SORT: {
@@ -1160,16 +1285,28 @@ int thumbyone_picker_run(void) {
                     break;
                 case MI_CLOSE:
                     g_menu_open = false;
-                    load_selection_assets(sel);
-                    render_hero(sel);
                     break;
-                default: break;   /* INFO rows: A is a no-op */
+                default: break;   /* INFO rows + sliders: A is a no-op */
                 }
             }
             /* B or MENU dismiss the overlay (NES menu convention). */
             if (just_pressed(PIN_B, &prev_b) ||
                 just_pressed(PIN_MENU, &prev_menu)) {
                 g_menu_open = false;
+            }
+
+            /* On close: persist volume / brightness if they moved.
+             * The shared-FAT write is synchronous via thumbyone_disk,
+             * so no flush needed here. */
+            if (!g_menu_open) {
+                if (g_menu_vol != g_menu_vol_initial) {
+                    thumbyone_settings_save_volume((uint8_t)g_menu_vol);
+                }
+                if (g_menu_bri != g_menu_bri_initial) {
+                    thumbyone_settings_save_brightness((uint8_t)g_menu_bri);
+                    /* Already applied live via on_change; this just
+                     * persists. */
+                }
                 load_selection_assets(sel);
                 render_hero(sel);
             }
@@ -1183,7 +1320,7 @@ int thumbyone_picker_run(void) {
                 /* does not return */
             }
 
-            if (dirty) render_menu(sel);
+            if (dirty && g_menu_open) render_menu(sel);
         } else {
             /* --- hero input --- */
             if (just_pressed(PIN_UP, &prev_up) ||
@@ -1231,6 +1368,13 @@ int thumbyone_picker_run(void) {
             if (just_pressed(PIN_MENU, &prev_menu)) {
                 g_menu_open = true;
                 g_menu_cursor = MI_SORT;
+                /* Snapshot the ThumbyOne system-wide settings so the
+                 * slider rows reflect current state. Save on close
+                 * only if moved. */
+                g_menu_vol = thumbyone_settings_load_volume();
+                g_menu_bri = thumbyone_settings_load_brightness();
+                g_menu_vol_initial = g_menu_vol;
+                g_menu_bri_initial = g_menu_bri;
                 render_menu(sel);
             }
 

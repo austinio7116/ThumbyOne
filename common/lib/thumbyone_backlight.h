@@ -32,7 +32,7 @@ extern "C" {
 
 #define THUMBYONE_BACKLIGHT_GPIO     7
 #define THUMBYONE_BACKLIGHT_WRAP     255
-#define THUMBYONE_BACKLIGHT_FLOOR    10   /* ~4 % — minimum visible in dim rooms */
+#define THUMBYONE_BACKLIGHT_FLOOR     5   /* ~2 % — minimum visible in dim rooms */
 #define THUMBYONE_BACKLIGHT_DEFAULT  255  /* full-on at boot */
 
 /* Configure GP7 as PWM output. Idempotent. Also starts the PWM

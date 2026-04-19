@@ -78,9 +78,33 @@ static inline int thumbyone_slot_partition_id(thumbyone_slot_t s) {
 
 /* P8 active-cart scratch region. Not a partition — P8 owns it,
  * erases and reprograms it per cart launch. Survives reboots
- * into any slot (the other slots never touch it). */
+ * into any slot (the other slots never touch it).
+ *
+ * Note: the last 4 KB sector of this region is carved off as the
+ * cross-slot settings mirror (see THUMBYONE_SETTINGS_MIRROR_*
+ * below). P8 erases / programs only up to SIZE, leaving the mirror
+ * untouched. Net P8 cart space: 252 KB — still plenty (the
+ * biggest compressed cart we've seen is < 64 KB). */
 #define THUMBYONE_P8_SCRATCH_OFFSET   0x620000u   /* 6272 KB */
-#define THUMBYONE_P8_SCRATCH_SIZE     (256u * 1024u)
+#define THUMBYONE_P8_SCRATCH_SIZE     (252u * 1024u)
+
+/* Cross-slot settings mirror — one 4 KB flash sector that the
+ * lobby + FatFs-enabled slots keep in sync with the tiny FatFs
+ * /.volume and /.brightness files. DOOM has no FatFs so can't
+ * read the files directly; it reads this mirror via XIP instead.
+ *
+ * Layout inside the sector (see thumbyone_settings_mirror.{c,h}):
+ *   byte 0..3 : magic "TSM1"
+ *   byte 4    : volume   (0..20)
+ *   byte 5    : brightness (0..255)
+ *   rest      : 0xFF padding (erased flash default)
+ *
+ * The mirror is written by thumbyone_settings_save_* after each
+ * FatFs write. Readers (including DOOM) must tolerate a stale
+ * mirror — the FatFs copy is the source of truth; the mirror is
+ * just DOOM's view. */
+#define THUMBYONE_SETTINGS_MIRROR_OFFSET  0x65F000u   /* 6524 KB */
+#define THUMBYONE_SETTINGS_MIRROR_SIZE    (4u * 1024u)
 
 /* Shared FAT volume consumes the rest of flash. Not a partition —
  * lobby and each slot access it via the common FatFs diskio

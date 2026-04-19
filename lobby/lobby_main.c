@@ -674,6 +674,34 @@ static void fill_row_hl(int y, int row_h) {
             g_fb[yy * 128 + xx] = L_COL_HL_BG;
 }
 
+/* Draw an outlined, filled slider bar — matches the NES/P8 slot
+ * menu slider style so the lobby widgets look identical to what
+ * the user sees inside a running slot. */
+static void draw_thick_slider(int x, int y, int w, int h,
+                               int value, int vmax,
+                               uint16_t fg, uint16_t bg) {
+    /* Background */
+    for (int yy = y; yy < y + h; ++yy)
+        for (int xx = x; xx < x + w; ++xx)
+            g_fb[yy * 128 + xx] = bg;
+    /* Outline */
+    for (int i = 0; i < w; ++i) {
+        g_fb[y * 128 + x + i] = fg;
+        g_fb[(y + h - 1) * 128 + x + i] = fg;
+    }
+    for (int j = 0; j < h; ++j) {
+        g_fb[(y + j) * 128 + x] = fg;
+        g_fb[(y + j) * 128 + x + w - 1] = fg;
+    }
+    /* Fill */
+    if (vmax <= 0) return;
+    int v = value < 0 ? 0 : (value > vmax ? vmax : value);
+    int fill_w = ((w - 2) * v) / vmax;
+    for (int j = 0; j < h - 2; ++j)
+        for (int i = 0; i < fill_w; ++i)
+            g_fb[(y + 1 + j) * 128 + (x + 1 + i)] = fg;
+}
+
 static void draw_thin_bar(int x, int y, int w, int h,
                           int value, int vmax, uint16_t fg, uint16_t bg) {
     for (int yy = y; yy < y + h; ++yy)
@@ -688,7 +716,7 @@ static void draw_thin_bar(int x, int y, int w, int h,
 }
 
 #ifndef THUMBYONE_FW_VERSION
-#define THUMBYONE_FW_VERSION "1.01"
+#define THUMBYONE_FW_VERSION "1.02"
 #endif
 
 static void render_lobby_menu(int cursor) {
@@ -781,36 +809,29 @@ static void render_lobby_menu(int cursor) {
         y += row_h;
     }
 
-    /* Volume — "N/20" + bar. LEFT/RIGHT adjust when cursor here. */
+    /* Volume + Brightness — label on the left, thick right-aligned
+     * outlined bar matching the NES/P8 slot menu slider style so
+     * the lobby widgets look identical to what the user sees
+     * inside a running slot. LEFT/RIGHT adjust when cursor here. */
     {
         int cursor_here = (cursor == LMI_VOL);
         if (cursor_here) fill_row_hl(y, row_h);
-        nes_font_draw(g_fb, "vol", 4, y, L_COL_DIM);
-        char val[12];
-        snprintf(val, sizeof(val), "%d/%d", g_menu_volume, THUMBYONE_VOLUME_MAX);
-        int vw = nes_font_width(val);
-        nes_font_draw(g_fb, val, 128 - vw - 4, y,
-                      cursor_here ? L_COL_HIGHLT : L_COL_TEXT);
-        draw_thin_bar(8, y + 7, bar_w, 2,
-                      g_menu_volume, THUMBYONE_VOLUME_MAX,
-                      L_COL_HIGHLT, L_COL_BAR_BG);
+        uint16_t fg = cursor_here ? L_COL_HIGHLT : L_COL_TEXT;
+        nes_font_draw(g_fb, "VOLUME", 4, y, L_COL_DIM);
+        draw_thick_slider(128 - 32, y + 1, 28, row_h - 2,
+                          g_menu_volume, THUMBYONE_VOLUME_MAX,
+                          fg, L_COL_BAR_BG);
         y += row_h;
     }
 
-    /* Brightness — "NN%" + bar. LEFT/RIGHT adjust, applied live. */
     {
         int cursor_here = (cursor == LMI_BRIGHT);
         if (cursor_here) fill_row_hl(y, row_h);
-        nes_font_draw(g_fb, "bright", 4, y, L_COL_DIM);
-        int pct = (g_menu_brightness * 100) / THUMBYONE_BRIGHTNESS_MAX;
-        char val[8];
-        snprintf(val, sizeof(val), "%d%%", pct);
-        int vw = nes_font_width(val);
-        nes_font_draw(g_fb, val, 128 - vw - 4, y,
-                      cursor_here ? L_COL_HIGHLT : L_COL_TEXT);
-        draw_thin_bar(8, y + 7, bar_w, 2,
-                      g_menu_brightness, THUMBYONE_BRIGHTNESS_MAX,
-                      L_COL_HIGHLT, L_COL_BAR_BG);
+        uint16_t fg = cursor_here ? L_COL_HIGHLT : L_COL_TEXT;
+        nes_font_draw(g_fb, "BRIGHTNESS", 4, y, L_COL_DIM);
+        draw_thick_slider(128 - 32, y + 1, 28, row_h - 2,
+                          g_menu_brightness, THUMBYONE_BRIGHTNESS_MAX,
+                          fg, L_COL_BAR_BG);
         y += row_h;
     }
 
