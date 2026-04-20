@@ -37,6 +37,9 @@ No per-system re-flashing. No "which firmware is this device running?" No re-for
 ## What's new in 1.03
 
 - **MicroPython games exit cleanly back to the picker.** If a game calls `sys.exit()`, `engine.end()`, raises an uncaught exception, or simply returns from `main.py`, the slot now reboots straight back into the MicroPython game picker instead of hanging on a dead REPL. Previously the device appeared frozen until you power-cycled it.
+- **Game Boy Color support** on the ThumbyNES slot. Drop `.gbc` carts alongside your `.gb` files — the emulator now runs them with their full CGB palette (converted to RGB565 per line). Powered by a swap to fhoedemakers' CGB-capable peanut_gb fork; DMG carts still work unchanged with the six built-in shade palettes.
+- **Chained-XIP for fragmented ROMs.** Fragmented cartridges used to refuse to load (`load err -35` on the red splash). They now fall back to a per-cluster XIP pointer table and still run at full 60 fps — no RAM copy, no defrag required. Drop a ROM, play it, defragment whenever (or never).
+- **Brand-new cluster-level defragmenter** for the shared FAT. The old file-level rewrite couldn't handle near-full volumes; the new one cycle-sorts clusters directly and works down to tiny free margins. Features a preview-and-confirm screen (A = apply, B = cancel) with before/after cluster maps so you can see what it'll do before it touches anything, live per-file cluster-map animation during the move, and a red "DO NOT POWER OFF" banner with matching front-LED indicator while the FAT is mid-write. Triggered from the ThumbyNES picker menu's "Defragment now"; running it is optional because chained-XIP handles fragmentation transparently, but compacting the free space lets you drop large new ROMs that otherwise wouldn't fit in one contiguous run.
 
 ## What's new in 1.02
 
@@ -73,7 +76,7 @@ See the [MENU overlay](#the-lobby) and per-slot menus for the slider rows; the [
 
 | System | What it plays | Content goes in |
 |---|---|---|
-| **ThumbyNES** | `.nes` (NES), `.sms` (Master System), `.gg` (Game Gear), `.gb` (Game Boy) | `/roms/` |
+| **ThumbyNES** | `.nes` (NES), `.sms` (Master System), `.gg` (Game Gear), `.gb` / `.gbc` (Game Boy + Color) | `/roms/` |
 | **ThumbyP8** | `.p8.png` PICO-8 carts | `/carts/` |
 | **ThumbyDOOM** | Shareware DOOM I — WAD baked into the firmware | *(none — embedded)* |
 | **MicroPython + Engine** | Python games written against the [Tiny Game Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine) | `/games/<name>/` |
@@ -237,7 +240,7 @@ No driver weirdness, no Windows Format dialog, no `mpremote` incantations. LB + 
   <img src="docs/screenshots/nes-menu.jpg" width="240" alt="In-game menu overlay">
 </p>
 
-A four-in-one retro emulator running Nofrendo for NES, smsplus for Master System + Game Gear, and Peanut-GB (with minigb_apu) for Game Boy DMG. Drop `.nes`, `.sms`, `.gg`, or `.gb` into `/roms/`; the tabbed picker groups them by system, shows thumbnails and metadata, and lets you favourite.
+A four-in-one retro emulator running Nofrendo for NES, smsplus for Master System + Game Gear, and Peanut-GB (fhoedemakers' CGB fork + minigb_apu) for Game Boy DMG and Color. Drop `.nes`, `.sms`, `.gg`, `.gb`, or `.gbc` into `/roms/`; the tabbed picker groups them by system, shows thumbnails and metadata, and lets you favourite.
 
 <p align="center">
   <img src="docs/screenshots/nes-sms.jpg" width="240" alt="Sonic on Master System">
@@ -250,7 +253,9 @@ A four-in-one retro emulator running Nofrendo for NES, smsplus for Master System
 - In-game pause menu (MENU button)
 - Fast-forward, palette switching, idle sleep
 - Live-pan read mode for Game Boy / GG (the 128×128 screen is narrower than the native output; pan to see the edges)
-- Automatic FAT defragmenter for large ROMs
+- Game Boy Color carts run with their native CGB palette (DMG carts use the six built-in shade palettes)
+- Chained-XIP fallback — fragmented ROMs still map from flash and run full-speed without a defrag
+- Cluster-level defragmenter with before/after preview and live move visualisation (picker menu → **Defragment now**)
 - Configurable CPU clock per-ROM
 
 **ThumbyOne differences:**
