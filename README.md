@@ -280,10 +280,16 @@ A four-in-one retro emulator running Nofrendo for NES, smsplus for Master System
 
 ThumbyNES runs cartridges straight out of flash via **XIP** rather than copying them to RAM — that's how a 1 MB Game Boy Color cart fits on a device with a ~330 KB heap. There are two XIP paths:
 
-1. **Contiguous mmap** — when the file's FAT chain is a single cluster run, the whole ROM maps to one flat address range in flash. Fastest path, no per-byte indirection.
-2. **Chained XIP** *(new in 1.03)* — when the file is fragmented, the loader builds a per-cluster pointer table and the core reads through it. Still fully zero-copy, still 60 fps, just a few percent more CPU per byte access.
+1. **Contiguous mmap** — when the file's FAT chain is a single cluster run, the whole ROM maps to one flat address range in flash. Every ROM byte access is a single flash read. Optimal path.
+2. **Chained XIP** *(new in 1.03)* — when the file is fragmented, the loader builds a per-cluster pointer table and every ROM read does a shift + mask + table lookup to find the right cluster. Still zero-copy, but the indirection adds CPU cost on every byte the core touches.
 
-Because chained XIP exists, **defragmenting is optional**. Drop a ROM over USB, play it immediately — it'll run whether the disk is clean or fragmented. What defragmenting buys you is contiguous **free space** for future uploads: dropping a 2 MB ROM needs 2 MB of contiguous clusters, not just 2 MB total free, so a fragmented free list can refuse a big write with room to spare on the volume. Compacting consolidates the free space into one run at the end of the disk.
+**Most games are fine either way.** Lighter carts (early NES, Game Boy, most SMS) stay locked to their native refresh rate on chained XIP. Heavier ones — dense NES mapper carts, some Game Boy Color games with large tilemaps, a few SMS titles with aggressive sample playback — can drop frames on chained XIP when they wouldn't on contiguous mmap. If a fragmented cart feels sluggish, defragging is the fix.
+
+**Why run the defragmenter:**
+- **Moves currently-fragmented carts onto the fast path.** Every cart on the volume ends up as a contiguous chain, so every cart runs via direct mmap with no per-byte indirection. If a cart was dropping frames because it was fragmented, a defrag puts it right.
+- **New uploads stay on the fast path too.** Defragging consolidates all free space into one run at the end of the volume. The next ROM you drop over USB lands in that contiguous run, which means it starts life as a contiguous file — no fragmentation, no chained XIP, no redefrag needed.
+
+**Why you can also not bother:** chained XIP means a fragmented volume isn't broken — every cart still loads and plays. Lighter games won't notice the difference. Defrag when a specific cart feels sluggish, or periodically just to keep future uploads on the fast path.
 
 Trigger it from the ThumbyNES picker menu → **Defragment now**. You get a preview first and nothing is written until you confirm.
 
