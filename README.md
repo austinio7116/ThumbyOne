@@ -554,8 +554,8 @@ Every slot has a 520 KB SRAM budget and a ~250 MHz default clock (higher on over
 
 - **Nofrendo** (GPLv2) — NES 6502 + PPU + APU.
 - **smsplus** (GPLv2, from the retro-go fork) — Master System / Game Gear Z80 + VDP + PSG.
-- **Peanut-GB** (MIT) — Game Boy DMG core.
-- **minigb_apu** (MIT) — Game Boy 4-channel APU, paired with Peanut-GB.
+- **Peanut-GB** (MIT) — Game Boy DMG + CGB core. Vendored from [fhoedemakers' fork](https://github.com/fhoedemakers/pico-peanutGB), which adds Game Boy Color support on top of Mahyar Koshkouei's original [Peanut-GB](https://github.com/deltabeard/Peanut-GB). Enabled via `PEANUT_FULL_GBC_SUPPORT`.
+- **minigb_apu** (MIT) — Game Boy 4-channel APU by Alex Baines, paired with Peanut-GB.
 
 **Performance & compatibility:**
 
@@ -857,8 +857,8 @@ Each system in ThumbyOne is a complete standalone firmware in its own repo; Thum
 - **Emulator cores in ThumbyNES:**
   - **[Nofrendo](https://github.com/TheDuckEmulates/nofrendo)** — NES 6502 + PPU + APU.
   - **[smsplus](https://github.com/ducalex/retro-go)** (from the retro-go fork of Charles MacDonald's original) — Master System / Game Gear Z80 + VDP + PSG.
-  - **[Peanut-GB](https://github.com/deltabeard/Peanut-GB)** — Game Boy DMG core.
-  - **[minigb_apu](https://github.com/baines/MiniGBS)** — Game Boy APU, paired with Peanut-GB.
+  - **[Peanut-GB](https://github.com/deltabeard/Peanut-GB)** by Mahyar Koshkouei (deltabeard) — Game Boy DMG core; CGB support added by Frans Hoedemakers in the **[pico-peanutGB fork](https://github.com/fhoedemakers/pico-peanutGB)** which ThumbyNES vendors.
+  - **[minigb_apu / MiniGBS](https://github.com/baines/MiniGBS)** by Alex Baines — Game Boy APU, paired with Peanut-GB.
 - **[rp2040-doom](https://github.com/kilograham/rp2040-doom)** — Graham Sanderson's tour-de-force DOOM port (Chocolate Doom → RP2040/RP2350).
 - **[Lexaloffle](https://www.lexaloffle.com/)** — creators of PICO-8. ThumbyP8 is a clean-room implementation of the documented API; if you play carts you like, [buy PICO-8](https://www.lexaloffle.com/pico-8.php) to support the creators and the community.
 - **[MicroPython](https://micropython.org/)** — Damien George and contributors.
