@@ -276,6 +276,33 @@ A four-in-one retro emulator running Nofrendo for NES, smsplus for Master System
 | MENU (held ~0.5 s, in-game) | Open the in-game pause menu (contains **Back to lobby**, save-state, palette, fast-forward, etc.) |
 | Hold B (on picker) | Toggle favourite for the highlighted ROM |
 
+#### FAT defragmenter (new in 1.03)
+
+ThumbyNES runs cartridges straight out of flash via **XIP** rather than copying them to RAM — that's how a 1 MB Game Boy Color cart fits on a device with a ~330 KB heap. There are two XIP paths:
+
+1. **Contiguous mmap** — when the file's FAT chain is a single cluster run, the whole ROM maps to one flat address range in flash. Fastest path, no per-byte indirection.
+2. **Chained XIP** *(new in 1.03)* — when the file is fragmented, the loader builds a per-cluster pointer table and the core reads through it. Still fully zero-copy, still 60 fps, just a few percent more CPU per byte access.
+
+Because chained XIP exists, **defragmenting is optional**. Drop a ROM over USB, play it immediately — it'll run whether the disk is clean or fragmented. What defragmenting buys you is contiguous **free space** for future uploads: dropping a 2 MB ROM needs 2 MB of contiguous clusters, not just 2 MB total free, so a fragmented free list can refuse a big write with room to spare on the volume. Compacting consolidates the free space into one run at the end of the disk.
+
+Trigger it from the ThumbyNES picker menu → **Defragment now**. You get a preview first and nothing is written until you confirm.
+
+**Preview screen** — before/after cluster maps, frag count, largest free contiguous block, total files and bytes. **A** applies, **B** cancels.
+
+<p align="center">
+  <img src="docs/screenshots/nes-defrag-preview.png" width="240" alt="Defrag preview — before/after cluster map, A=apply B=cancel">
+</p>
+
+**During execution** — clusters move live; the map redraws per file (one hue per file, cycled through a 15-colour palette). A red "DO NOT POWER OFF" banner at the top is mirrored by the front LED going solid red while the FAT is mid-write.
+
+<p align="center">
+  <img src="docs/screenshots/nes-defrag-moving.png" width="240" alt="Defrag running — live cluster map with DO NOT POWER OFF banner and progress counter">
+</p>
+
+The pass does an **in-place cluster-level cycle sort** (same family as Norton SpeedDisk and ext4 `e4defrag`): it plans the target layout first, then cycles each cluster into place using only two cluster-sized RAM buffers — so it works on near-full volumes where a file-level rewrite would need 2× the largest file free. Phases: cluster move, FAT rebuild, directory-entry patch, FatFs remount. A post-pass re-check counts fragmented files against the original to confirm the pass worked.
+
+Running it on an already-clean volume is a no-op (preview shows `0 mv`, zero writes).
+
 ### ThumbyP8 — PICO-8
 
 *Based on [ThumbyP8](https://github.com/austinio7116/P8Thumb) — a clean-room PICO-8 runtime. PICO-8 is a trademark of [Lexaloffle](https://www.lexaloffle.com/pico-8.php); if you enjoy playing carts, **please buy PICO-8** to support the creators and the community.*
