@@ -34,6 +34,48 @@ No per-system re-flashing. No "which firmware is this device running?" No re-for
 
 ---
 
+## What you get
+
+| System | What it plays | Content goes in |
+|---|---|---|
+| **ThumbyNES** | `.nes` (NES), `.sms` (Master System), `.gg` (Game Gear), `.gb` / `.gbc` (Game Boy + Color) | `/roms/` |
+| **ThumbyP8** | `.p8.png` PICO-8 carts | `/carts/` |
+| **ThumbyDOOM** | Shareware DOOM I — WAD baked into the firmware | *(none — embedded)* |
+| **MicroPython + Engine** | Python games written against the [Tiny Game Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine) | `/games/<name>/` |
+
+All four systems share one 9.6 MB FAT drive, visible over USB when you're in the lobby.
+
+**Everything is optional.** If you never want DOOM, rebuild without it and reclaim 2.5 MB. If you only want the Python side, turn off the three emulators. See the [build matrix](#build-matrix).
+
+---
+
+## What's new in 1.04
+
+- **Game Boy Color and Game Gear look better.** The asymmetric
+  5:4 × 9:8 scaling the 160×144 screens need to fill the Thumby's
+  128×128 display used to drop every 5th source column and every
+  9th row with a pure nearest-neighbour blit — thin text strokes
+  disappeared in menus, HUDs and dialogue boxes. FIT now runs a
+  coverage-weighted blend that preserves every source pixel
+  proportional to its footprint, making text clean and legible.
+  A new **BLEND toggle** in each cart's in-game menu (default on
+  for GB / GBC / GG) lets you flip back to pure nearest on carts
+  where you specifically want the old sharp look.
+- **Palette-aware DMG blend.** On original Game Boy carts the
+  blend runs in palette-index space and interpolates between
+  neighbouring palette entries, so the classic Nintendo green (and
+  every other DMG palette) stays on its own gradient instead of
+  picking up the teal hue shift a naive RGB blend would introduce
+  between the lighter and darker greens.
+- **Packed-RGB565 lerp** for the fast blend path. One 32-bit
+  multiply per pixel lerp handles all three channels in parallel;
+  the full 128×128 blend costs well under a millisecond per frame
+  at 250 MHz.
+- **New 300 MHz overclock option** in the NES-slot menus — both
+  the global Overclock row in the picker menu and the per-cart
+  Overclock in each in-game menu. Default stays at 250 MHz; 300
+  MHz is there for dense carts that want extra headroom.
+
 ## What's new in 1.03
 
 - **MicroPython games exit cleanly back to the picker.** If a game calls `sys.exit()`, `engine.end()`, raises an uncaught exception, or simply returns from `main.py`, the slot now reboots straight back into the MicroPython game picker instead of hanging on a dead REPL. Previously the device appeared frozen until you power-cycled it.
@@ -69,21 +111,6 @@ Under-the-hood fixes that you might notice:
 Storage format: system settings (volume + brightness) live in a single 4 KB flash sector — readable by every slot including DOOM, written only when you move a slider and close the menu.
 
 See the [MENU overlay](#the-lobby) and per-slot menus for the slider rows; the [technical notes](#per-slot-architecture) explain the flash layout for curious readers.
-
----
-
-## What you get
-
-| System | What it plays | Content goes in |
-|---|---|---|
-| **ThumbyNES** | `.nes` (NES), `.sms` (Master System), `.gg` (Game Gear), `.gb` / `.gbc` (Game Boy + Color) | `/roms/` |
-| **ThumbyP8** | `.p8.png` PICO-8 carts | `/carts/` |
-| **ThumbyDOOM** | Shareware DOOM I — WAD baked into the firmware | *(none — embedded)* |
-| **MicroPython + Engine** | Python games written against the [Tiny Game Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine) | `/games/<name>/` |
-
-All four systems share one 9.6 MB FAT drive, visible over USB when you're in the lobby.
-
-**Everything is optional.** If you never want DOOM, rebuild without it and reclaim 2.5 MB. If you only want the Python side, turn off the three emulators. See the [build matrix](#build-matrix).
 
 ---
 
@@ -276,38 +303,9 @@ A four-in-one retro emulator running Nofrendo for NES, smsplus for Master System
 | MENU (held ~0.5 s, in-game) | Open the in-game pause menu (contains **Back to lobby**, save-state, palette, fast-forward, etc.) |
 | Hold B (on picker) | Toggle favourite for the highlighted ROM |
 
-#### FAT defragmenter (new in 1.03)
+#### Defragmenter
 
-ThumbyNES runs cartridges straight out of flash via **XIP** rather than copying them to RAM — that's how a 1 MB Game Boy Color cart fits on a device with a ~330 KB heap. There are two XIP paths:
-
-1. **Contiguous mmap** — when the file's FAT chain is a single cluster run, the whole ROM maps to one flat address range in flash. Every ROM byte access is a single flash read. Optimal path.
-2. **Chained XIP** *(new in 1.03)* — when the file is fragmented, the loader builds a per-cluster pointer table and every ROM read does a shift + mask + table lookup to find the right cluster. Still zero-copy, but the indirection adds CPU cost on every byte the core touches.
-
-**Most games are fine either way.** Lighter carts (early NES, Game Boy, most SMS) stay locked to their native refresh rate on chained XIP. Heavier ones — dense NES mapper carts, some Game Boy Color games with large tilemaps, a few SMS titles with aggressive sample playback — can drop frames on chained XIP when they wouldn't on contiguous mmap. If a fragmented cart feels sluggish, defragging is the fix.
-
-**Why run the defragmenter:**
-- **Moves currently-fragmented carts onto the fast path.** Every cart on the volume ends up as a contiguous chain, so every cart runs via direct mmap with no per-byte indirection. If a cart was dropping frames because it was fragmented, a defrag puts it right.
-- **New uploads stay on the fast path too.** Defragging consolidates all free space into one run at the end of the volume. The next ROM you drop over USB lands in that contiguous run, which means it starts life as a contiguous file — no fragmentation, no chained XIP, no redefrag needed.
-
-**Why you can also not bother:** chained XIP means a fragmented volume isn't broken — every cart still loads and plays. Lighter games won't notice the difference. Defrag when a specific cart feels sluggish, or periodically just to keep future uploads on the fast path.
-
-Trigger it from the ThumbyNES picker menu → **Defragment now**. You get a preview first and nothing is written until you confirm.
-
-**Preview screen** — before/after cluster maps, frag count, largest free contiguous block, total files and bytes. **A** applies, **B** cancels.
-
-<p align="center">
-  <img src="docs/screenshots/nes-defrag-preview.png" width="240" alt="Defrag preview — before/after cluster map, A=apply B=cancel">
-</p>
-
-**During execution** — clusters move live; the map redraws per file (one hue per file, cycled through a 15-colour palette). A red "DO NOT POWER OFF" banner at the top is mirrored by the front LED going solid red while the FAT is mid-write.
-
-<p align="center">
-  <img src="docs/screenshots/nes-defrag-moving.png" width="240" alt="Defrag running — live cluster map with DO NOT POWER OFF banner and progress counter">
-</p>
-
-The pass does an **in-place cluster-level cycle sort** (same family as Norton SpeedDisk and ext4 `e4defrag`): it plans the target layout first, then cycles each cluster into place using only two cluster-sized RAM buffers — so it works on near-full volumes where a file-level rewrite would need 2× the largest file free. Phases: cluster move, FAT rebuild, directory-entry patch, FatFs remount. A post-pass re-check counts fragmented files against the original to confirm the pass worked.
-
-Running it on an already-clean volume is a no-op (preview shows `0 mv`, zero writes).
+ThumbyNES has a full-volume FAT defragmenter with a preview-and-confirm UX and live cluster-map visualisation, reachable from the picker menu's **Defragment now** action. It's only needed occasionally — chained-XIP means fragmented carts still load and play — so the full write-up lives under [Tips and troubleshooting → FAT defragmenter](#fat-defragmenter) rather than taking up space here.
 
 ### ThumbyP8 — PICO-8
 
@@ -455,6 +453,41 @@ ThumbyOne enumerates as a different USB product ID to avoid driver-letter collis
 
 **Everything's broken after a bad transfer.**
 Hold **LB + RB** at boot, hold them through the countdown — fresh FAT, pristine device.
+
+### FAT defragmenter
+
+ThumbyNES runs cartridges straight out of flash via **XIP** rather than copying them to RAM — that's how a 1 MB Game Boy Color cart fits on a device with a ~330 KB heap. There are two XIP paths:
+
+1. **Contiguous mmap** — when the file's FAT chain is a single cluster run, the whole ROM maps to one flat address range in flash. Every ROM byte access is a single flash read. Optimal path.
+2. **Chained XIP** *(new in 1.03)* — when the file is fragmented, the loader builds a per-cluster pointer table and every ROM read does a shift + mask + table lookup to find the right cluster. Still zero-copy, but the indirection adds CPU cost on every byte the core touches.
+
+**Most games are fine either way.** Lighter carts (early NES, Game Boy, most SMS) stay locked to their native refresh rate on chained XIP. Heavier ones — dense NES mapper carts, some Game Boy Color games with large tilemaps, a few SMS titles with aggressive sample playback — can drop frames on chained XIP when they wouldn't on contiguous mmap. If a fragmented cart feels sluggish, defragging is the fix.
+
+**Why run the defragmenter:**
+- **Moves currently-fragmented carts onto the fast path.** Every cart on the volume ends up as a contiguous chain, so every cart runs via direct mmap with no per-byte indirection. If a cart was dropping frames because it was fragmented, a defrag puts it right.
+- **New uploads stay on the fast path too.** Defragging consolidates all free space into one run at the end of the volume. The next ROM you drop over USB lands in that contiguous run, which means it starts life as a contiguous file — no fragmentation, no chained XIP, no redefrag needed.
+
+**Why you can also not bother:** chained XIP means a fragmented volume isn't broken — every cart still loads and plays. Lighter games won't notice the difference. Defrag when a specific cart feels sluggish, or periodically just to keep future uploads on the fast path.
+
+Trigger it from the ThumbyNES picker menu → **Defragment now**. You get a preview first and nothing is written until you confirm.
+
+**Preview screen** — before/after cluster maps, frag count, largest free contiguous block, total files and bytes. **A** applies, **B** cancels.
+
+<p align="center">
+  <img src="docs/screenshots/nes-defrag-preview.png" width="240" alt="Defrag preview — before/after cluster map, A=apply B=cancel">
+</p>
+
+**During execution** — clusters move live; the map redraws per file (one hue per file, cycled through a 15-colour palette). A red "DO NOT POWER OFF" banner at the top is mirrored by the front LED going solid red while the FAT is mid-write.
+
+<p align="center">
+  <img src="docs/screenshots/nes-defrag-moving.png" width="240" alt="Defrag running — live cluster map with DO NOT POWER OFF banner and progress counter">
+</p>
+
+The pass does an **in-place cluster-level cycle sort** (same family as Norton SpeedDisk and ext4 `e4defrag`): it plans the target layout first, then cycles each cluster into place using only two cluster-sized RAM buffers — so it works on near-full volumes where a file-level rewrite would need 2× the largest file free. Phases: cluster move, FAT rebuild, directory-entry patch, FatFs remount. A post-pass re-check counts fragmented files against the original to confirm the pass worked.
+
+Running it on an already-clean volume is a no-op (preview shows `0 mv`, zero writes).
+
+**A note on flash wear:** a full defrag rewrites every moved cluster to flash, and the RP2350's internal QSPI flash is a consumer-grade chip with a finite erase/program endurance (spec is ~100k cycles per sector). One defrag a week after a big upload session won't meaningfully dent that budget, but don't run it for fun — it's an occasional tidy-up, not something to trigger every time you boot. Preview-and-confirm is there partly to make accidental runs hard; the "nothing to do" no-op also means repeat runs on a clean volume cost zero writes.
 
 ---
 
