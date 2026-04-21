@@ -41,10 +41,6 @@ static float g_half_ema        = 0.0f;
 static int   g_reported_pct    = -1;
 static bool  g_reported_chg    = false;
 
-/* Last raw ADC average (12-bit counts) from the most recent sample
- * burst. Used by the debug accessor below. */
-static int   g_last_raw_counts = 0;
-
 /* --- helpers ------------------------------------------------------- */
 
 /* Insertion sort — 16 elements, negligible cost (~100 cycles). */
@@ -76,7 +72,6 @@ static float read_half_voltage_raw(void) {
     for (int i = lo; i < hi; ++i) sum += samples[i];
     float avg_counts = (float)sum / (float)(hi - lo);
 
-    g_last_raw_counts = (int)(avg_counts + 0.5f);
     return avg_counts * ADC_REF_VOLTS / (float)ADC_MAX_COUNT;
 }
 
@@ -152,20 +147,4 @@ void thumbyone_battery_read(int *pct, bool *chg, float *volts) {
     if (pct)   *pct   = g_reported_pct;
     if (chg)   *chg   = g_reported_chg;
     if (volts) *volts = g_half_ema * 2.0f;
-}
-
-void thumbyone_battery_read_debug(int *raw_counts,
-                                    float *half_fresh_v,
-                                    float *half_ema_v) {
-    thumbyone_battery_init();
-
-    /* Fresh sample burst so raw_counts + half_fresh reflect RIGHT
-     * NOW, not a stale value from the last thumbyone_battery_read
-     * call. Does not touch g_half_ema (which only the main read
-     * function should advance). */
-    float h_fresh = read_half_voltage_raw();
-
-    if (raw_counts)   *raw_counts   = g_last_raw_counts;
-    if (half_fresh_v) *half_fresh_v = h_fresh;
-    if (half_ema_v)   *half_ema_v   = g_have_prev ? g_half_ema : h_fresh;
 }
