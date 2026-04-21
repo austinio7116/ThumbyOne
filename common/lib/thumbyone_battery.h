@@ -36,6 +36,25 @@ extern "C" {
 /* Configure ADC + pin. Idempotent. Safe to call multiple times. */
 void thumbyone_battery_init(void);
 
+/* Diagnostic read — exposes the internal numbers the percent
+ * calculation is derived from. Any out pointer may be NULL.
+ *
+ *   raw_counts     : average 12-bit ADC counts after trimmed-mean
+ *                    smoothing (0..4095)
+ *   half_fresh_v   : half-divider voltage from this very read
+ *                    (raw_counts × 3.3 / 4095), before EMA
+ *   half_ema_v     : half-divider voltage after EMA smoothing —
+ *                    what percent / charging-flag are computed from
+ *
+ * Used by the debug overlay to confirm whether the "45 % / 3.29 V"
+ * report reflects a real under-voltage or an ADC-scaling bug. A
+ * single fresh ADC burst feeds both this and the next
+ * thumbyone_battery_read; do not call both back-to-back if the
+ * second call's value needs to reflect the EXACT same samples. */
+void thumbyone_battery_read_debug(int *raw_counts,
+                                    float *half_fresh_v,
+                                    float *half_ema_v);
+
 /* Read smoothed battery state. Any of the out pointers may be NULL.
  *
  *   pct     : 0..100 (integer percent, hysteresised ±2 %)
