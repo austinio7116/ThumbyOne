@@ -13,7 +13,7 @@ ThumbyOne is a unified multi-boot firmware for the [TinyCircuits Thumby Color](h
   <img src="docs/screenshots/doom-gameplay.jpg" width="240" alt="Doom on Thumby Color">
 </p>
 
-No per-system re-flashing. No "which firmware is this device running?" No re-formatting to share files. Pick a system from the lobby, it boots; every slot has a clear way back.
+No per-system re-flashing.
 
 ---
 
