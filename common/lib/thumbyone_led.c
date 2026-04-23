@@ -22,32 +22,46 @@
 #define PIN_LED_B   12   /* PWM6 A */
 #define LED_PWM_WRAP 2048
 
-/* Peak LED duty cap. Raw hardware LED at 100 % duty is uncomfortably
- * bright; 80 % is the nominal "brightest" level — bumped from 63 %
- * on 2026-04-23 because the old cap felt too dim as the top of the
- * slider range. Keep in sync with lobby_main.c's open-coded copy and
- * engine_io_rp3.c's LED_MAX_ON_FRACTION. */
-#define LED_MAX_ON_PCT  80
+/* LED brightness curve: at slider=0 the LED runs at LED_MIN_DUTY
+ * (just-visible), and at slider=255 at LED_MAX_DUTY (the nominal
+ * "brightest" — capped below 100 % because raw full duty is painful
+ * in a dark room). Intermediate slider values linearly interpolate.
+ * Channel intensity (0..255 per R/G/B) then scales the peak.
+ *
+ * Earlier revisions used `channel × slider × MAX_PCT × WRAP /
+ * denom` (i.e. slider scales from 0 → MAX) with a floor. That left
+ * mid-slider values uncomfortably dim and wasted the low-slider
+ * range on "floored but identical" territory. Linear MIN..MAX gives
+ * every slider position a distinct, useful brightness.
+ *
+ * Keep these values in sync with lobby_main.c's open-coded copy
+ * and engine_io_rp3.c. */
+#define LED_MIN_DUTY    400    /* slider=0,   channel=255  → ~19.5 % */
+#define LED_MAX_DUTY   1638    /* slider=255, channel=255  → ~80 %   */
 
-/* Minimum on-time applied per-channel when the caller set that
- * channel non-zero. Floors low-slider values so the LED stays
- * visible even when the screen is dimmed for a dark room. 180 =
- * ~9 % duty at WRAP 2048 (was 100 ≈ 5 %). */
-#define LED_ON_TIME_FLOOR  180
-
-/* Claim the pin as PWM and set our WRAP. This is called on every
- * set_rgb rather than once at startup, because sibling drivers in
- * the same slot may change the PWM wrap behind our back — e.g. NES
- * defrag reconfigures GPIO 11 with WRAP=255 for an 8-bit single-
- * channel setup; if the picker then writes a level computed against
- * WRAP=2048 the slice would modulo it and the LED output would be
- * silently wrong. Cheap (a few MMIO writes) and always correct. */
+/* Claim the pin as PWM, with a full per-pin pwm_init (NOT just
+ * pwm_set_wrap). Matches the lobby's led_pwm_setup_pin pattern
+ * exactly — the lobby has a comment (lobby_main.c:288) noting that
+ * on the RP2350 a per-slice pwm_set_wrap sometimes leaves the
+ * channel config in a state where one PWM channel (slice 5A =
+ * green in the lobby's case) silently fails to output. Re-issuing
+ * pwm_init with a fresh config per pin is the pattern that
+ * reliably lands the hardware configuration.
+ *
+ * Called on every set_rgb rather than once at startup, because
+ * sibling drivers in the same slot may repurpose the pins behind
+ * our back — e.g. NES defrag reconfigures GPIO 11 as a bare GPIO
+ * for a brief red-on/red-off status. The reclaim then hands the
+ * pin back to PWM with our WRAP before the next LED paint. Cost:
+ * a few MMIO writes plus a one-cycle CC reset (inaudibly brief at
+ * the 73 kHz PWM rate). */
 static void reclaim_pwm(uint gpio) {
     gpio_set_function(gpio, GPIO_FUNC_PWM);
     uint slice = pwm_gpio_to_slice_num(gpio);
-    pwm_set_clkdiv_int_frac(slice, 1, 0);
-    pwm_set_wrap(slice, LED_PWM_WRAP);
-    pwm_set_enabled(slice, true);
+    pwm_config cfg = pwm_get_default_config();
+    pwm_config_set_clkdiv_int(&cfg, 1);
+    pwm_config_set_wrap(&cfg, LED_PWM_WRAP);
+    pwm_init(slice, &cfg, true);
 }
 
 void thumbyone_led_init(void) {
@@ -59,13 +73,21 @@ void thumbyone_led_init(void) {
     pwm_set_gpio_level(PIN_LED_B, LED_PWM_WRAP);
 }
 
-/* Scale a single channel to the PWM off-time. uint64 because the
- * intermediate (channel × slider × PCT × WRAP) can exceed 2^32. */
+/* Scale one channel (0..255) to the PWM off-time (common-anode →
+ * more off-time = less bright; off-time = WRAP - on-time).
+ *
+ *   peak_on = MIN_DUTY + (MAX_DUTY - MIN_DUTY) × slider / 255
+ *   on_time = peak_on × channel / 255         (scale by channel)
+ *
+ * channel == 0 is a hard-off: the whole RGB request can ask a channel
+ * to be totally dark (e.g. pure green wants R=0, B=0). The linear
+ * interpolation above would give peak_on × 0 = 0 anyway, but we
+ * short-circuit the branch to make that explicit. */
 static inline uint16_t channel_offtime(uint8_t channel, uint8_t slider) {
-    uint64_t on = (uint64_t)channel * slider * LED_MAX_ON_PCT * LED_PWM_WRAP;
-    uint64_t denom = 255ull * 255ull * 100ull;
-    uint32_t on_time = (uint32_t)(on / denom);
-    if (channel > 0 && on_time < LED_ON_TIME_FLOOR) on_time = LED_ON_TIME_FLOOR;
+    if (channel == 0) return LED_PWM_WRAP;   /* fully off */
+    uint32_t peak_on = LED_MIN_DUTY
+                    + ((uint32_t)(LED_MAX_DUTY - LED_MIN_DUTY) * slider) / 255u;
+    uint32_t on_time = (peak_on * channel) / 255u;
     if (on_time > LED_PWM_WRAP) on_time = LED_PWM_WRAP;
     return (uint16_t)(LED_PWM_WRAP - on_time);
 }

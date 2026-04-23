@@ -235,33 +235,20 @@ static bool confirm_erase_chord(void) {
 #define PIN_LED_B   12   /* PWM6 A */
 #define LED_PWM_WRAP 2048
 
-/* Ceiling applied on top of the brightness slider. At slider = 255
- * (max) the peak LED duty cycle is LED_MAX_ON_PCT / 100. The raw
- * hardware LED is uncomfortably bright at 100 % duty; 80 % is the
- * nominal "brightest" the user sees — bumped from 63 % on 2026-04-23
- * because the old cap felt too dim as the top-of-slider level. Keep
- * in sync with common/lib/thumbyone_led.c and engine_io_rp3.c. */
-#define LED_MAX_ON_PCT  80
+/* LED brightness curve: slider 0..255 linearly interpolates the
+ * peak on-time between LED_MIN_DUTY and LED_MAX_DUTY. Channel
+ * intensity (0..255) then scales that peak. Keeps every slider
+ * position distinct and visible — the earlier "slider × MAX_PCT
+ * with floor" left mid-slider values dim and low-slider invisible.
+ * Keep in sync with common/lib/thumbyone_led.c and engine_io_rp3.c. */
+#define LED_MIN_DUTY    400    /* slider=0,   channel=255  → ~19.5 % */
+#define LED_MAX_DUTY   1638    /* slider=255, channel=255  → ~80 %   */
 
-/* Minimum on-time applied per-channel when the caller requested a
- * non-zero value. Floors low brightness slider values so the USB
- * indicator (and especially the dim blue LED die) stays visible.
- * 180 = ~9 % duty at WRAP 2048 (was 100 ≈ 5 %). */
-#define LED_ON_TIME_FLOOR 180
-
-/* Scale a single channel (0..255) to the PWM off-time (counts
- * pin-HIGH per cycle; common-anode means more off-time = less
- * bright). Brightness slider and LED_MAX_ON_PCT ceiling are
- * composed in: at slider=255 channel=255 peak is LED_MAX_ON_PCT %
- * of LED_PWM_WRAP; slider dims linearly below that; channel=0
- * always lands at fully-off regardless of slider. uint64 math
- * because the intermediate (channel × slider × PCT × WRAP) can
- * exceed 2^32 at the top end. */
 static inline uint16_t led_channel_offtime(int channel, uint8_t slider) {
-    uint64_t on = (uint64_t)channel * slider * LED_MAX_ON_PCT * LED_PWM_WRAP;
-    uint64_t denom = 255ull * 255ull * 100ull;
-    uint32_t on_time = (uint32_t)(on / denom);
-    if (channel > 0 && on_time < LED_ON_TIME_FLOOR) on_time = LED_ON_TIME_FLOOR;
+    if (channel <= 0) return LED_PWM_WRAP;   /* fully off */
+    uint32_t peak_on = LED_MIN_DUTY
+                    + ((uint32_t)(LED_MAX_DUTY - LED_MIN_DUTY) * slider) / 255u;
+    uint32_t on_time = (peak_on * (uint32_t)channel) / 255u;
     if (on_time > LED_PWM_WRAP) on_time = LED_PWM_WRAP;
     return (uint16_t)(LED_PWM_WRAP - on_time);
 }
