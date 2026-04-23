@@ -38,16 +38,57 @@ No per-system re-flashing.
 
 | System | What it plays | Content goes in |
 |---|---|---|
-| **ThumbyNES** | `.nes` (NES), `.sms` (Master System), `.gg` (Game Gear), `.gb` / `.gbc` (Game Boy + Color) | `/roms/` |
+| **ThumbyNES** | `.nes` (NES), `.sms` (Master System), `.gg` (Game Gear), `.gb` / `.gbc` (Game Boy + Color), `.md` / `.gen` / `.bin` (Mega Drive / Genesis) | `/roms/` |
 | **ThumbyP8** | `.p8.png` PICO-8 carts | `/carts/` |
 | **ThumbyDOOM** | Shareware DOOM I — WAD baked into the firmware | *(none — embedded)* |
 | **MicroPython + Engine** | Python games written against the [Tiny Game Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine) | `/games/<name>/` |
 
-All four systems share one 9.6 MB FAT drive, visible over USB when you're in the lobby.
+All four systems share one FAT drive, visible over USB when you're in the lobby. Size depends on the build: **8.6 MB in the default (MD-enabled) layout**, 9.6 MB in the backward-compat `THUMBYONE_WITH_MD=OFF` build.
 
-**Everything is optional.** If you never want DOOM, rebuild without it and reclaim 2.5 MB. If you only want the Python side, turn off the three emulators. See the [build matrix](#build-matrix).
+**Everything is optional.** If you never want MD, rebuild with `-DTHUMBYONE_WITH_MD=OFF` and reclaim 1 MB for the FAT. If you never want DOOM, drop it from the build for 2.5 MB. Python-only builds turn the three emulators off entirely. See the [build matrix](#build-matrix).
 
 ---
+
+## What's new in 1.05
+
+- **Sega Mega Drive / Genesis support** via vendored
+  [PicoDrive](https://github.com/notaz/picodrive) (LGPLv2), integrated
+  into the ThumbyNES slot. Drop `.md` / `.gen` / `.bin` into `/roms/`;
+  the picker gets a new **MD** tab. Boots and plays most 1990-era
+  3-button carts (Sonic 2, Streets of Rage 2, many more) locked at
+  50 FPS PAL with full audio at the 300 MHz overclock. See the
+  ThumbyNES repo's [Changelog v1.05](https://github.com/austinio7116/ThumbyNES#v105--mega-drive--genesis)
+  for the emulator-level details (IRAM tricks, adaptive VDP skip,
+  runtime audio modes, etc.) and [`vendor/VENDORING.md`](https://github.com/austinio7116/ThumbyNES/blob/main/vendor/VENDORING.md)
+  for the 18 individual PicoDrive patches that got it running on
+  Cortex-M33 + XIP flash.
+
+- **New `THUMBYONE_WITH_MD` build option** (default `ON`). PicoDrive's
+  ~850 KB of precomputed flash tables (FAME 68K jumptable 256 KB,
+  YM2612 log-sine + LFO 208 + 128 KB, cz80 SZHVC 256 KB) don't fit
+  in the original 1 MB NES partition, so the default build grows
+  that partition to 2 MB and shifts every downstream partition +
+  the shared FAT up by 1 MB (FAT goes from 9.6 MB to 8.6 MB of
+  ROM storage). Users who want the old layout + no MD can rebuild
+  with `-DTHUMBYONE_WITH_MD=OFF`; ThumbyNES drops to 643 KB, the
+  NES partition stays 1 MB, and the FAT keeps its 9.6 MB.
+
+- **DOOM overlay menu trigger changed** from the LB + RB chord to a
+  MENU long-press, matching the in-game menu gesture used everywhere
+  else. MENU-tap still opens the vanilla DOOM Main Menu (Save /
+  Load / Options / Quit). The cross-slot handoff from DOOM's
+  overlay menu to the lobby is now wired up — no need to route
+  through Main Menu → Quit Game any more.
+
+- **Battery module raw-ADC diagnostics** exposed via a new accessor
+  so the picker / in-game overlays can show counts for debugging,
+  and the half-voltage logic got refreshed for more accurate
+  reporting near the low-battery cutoff.
+
+- **NES defragmenter planner refresh** — the cluster-level defragmenter
+  introduced in v1.03 got a planner rewrite for faster compaction and
+  a cleaner preview on near-full volumes. See the NES slot's picker
+  menu → **Defragment now**.
 
 ## What's new in 1.04
 
@@ -257,7 +298,7 @@ No driver weirdness, no Windows Format dialog, no `mpremote` incantations. LB + 
 
 ## The systems
 
-### ThumbyNES — NES / Master System / Game Gear / Game Boy
+### ThumbyNES — NES / Master System / Game Gear / Game Boy / Mega Drive
 
 *Based on [ThumbyNES](https://github.com/austinio7116/ThumbyNES) — see that repo for the standalone firmware, the full feature list, and detailed docs.*
 
@@ -267,7 +308,9 @@ No driver weirdness, no Windows Format dialog, no `mpremote` incantations. LB + 
   <img src="docs/screenshots/nes-menu.jpg" width="240" alt="In-game menu overlay">
 </p>
 
-A four-in-one retro emulator running Nofrendo for NES, smsplus for Master System + Game Gear, and Peanut-GB (fhoedemakers' CGB fork + minigb_apu) for Game Boy DMG and Color. Drop `.nes`, `.sms`, `.gg`, `.gb`, or `.gbc` into `/roms/`; the tabbed picker groups them by system, shows thumbnails and metadata, and lets you favourite.
+A five-in-one retro emulator running Nofrendo for NES, smsplus for Master System + Game Gear, Peanut-GB (fhoedemakers' CGB fork + minigb_apu) for Game Boy DMG and Color, and PicoDrive for Sega Mega Drive / Genesis. Drop `.nes`, `.sms`, `.gg`, `.gb`, `.gbc`, `.md`, `.gen`, or `.bin` into `/roms/`; the tabbed picker groups them by system, shows thumbnails and metadata, and lets you favourite.
+
+**MD note:** PicoDrive adds ~850 KB of precomputed flash tables (FAME jumptable + YM2612 + cz80 SZHVC), pushing the NES slot past the default 1 MB partition. ThumbyOne's default build (`THUMBYONE_WITH_MD=ON`) grows the NES partition to 2 MB to hold it, shifting every downstream partition and the shared FAT up by 1 MB. Build with `-DTHUMBYONE_WITH_MD=OFF` for the backward-compatible 1 MB layout (NES/SMS/GB only, original 9.6 MB FAT).
 
 <p align="center">
   <img src="docs/screenshots/nes-sms.jpg" width="240" alt="Sonic on Master System">
@@ -363,14 +406,14 @@ The real deal. Music, sound effects, save games, screen melts, all on a 128×128
 - Full shareware DOOM I (E1M1 – E1M9)
 - 12-bit PWM DAC audio with dithering — OPL2 music (via [emu8950](https://github.com/digital-sound-antiques/emu8950)) + 8-channel ADPCM SFX mixed on core1
 - Save / load to flash (6 save slots)
-- Overlay menu (hold **LB + RB** for 3 s) with brightness, gamma, volume, controls scheme, and cheats (god / all-weapons / no-clip / level warp)
+- Overlay menu (**MENU long-press**) with brightness, gamma, volume, controls scheme, and cheats (god / all-weapons / no-clip / level warp)
 - Persistent settings (slot 7) survive power cycles
 
 **ThumbyOne differences:**
 
-- WAD is in the firmware itself (2.5 MB), so DOOM never touches the shared FAT — it plays just fine even on a freshly-wiped device.
+- WAD is in the firmware itself (1.8 MB shareware), so DOOM never touches the shared FAT — it plays just fine even on a freshly-wiped device.
 - The in-game **Quit Game** menu item returns to the lobby directly — the vanilla "Are you sure? (Y/N)" confirm dialog is short-circuited under `THUMBYONE_SLOT_MODE`.
-- Hold-MENU as a cross-slot chord isn't wired up in DOOM yet; use Main Menu → Quit Game.
+- System-wide volume + brightness from `/.volume` and `/.brightness` are honoured; changing them in the overlay menu writes back to the shared settings sector.
 
 **Controls:**
 
@@ -380,8 +423,8 @@ The real deal. Music, sound effects, save games, screen melts, all on a 128×128
 | A | Fire / confirm |
 | B | Use / cancel (hold for automap) |
 | B + LB / B + RB | Prev / next weapon |
-| MENU | Main Menu (Save / Load / Options / Quit Game) |
-| LB + RB (hold 3 s) | Overlay menu (cheats, gamma, volume, warp) |
+| MENU (tap) | Main Menu (Save / Load / Options / Quit Game) |
+| MENU (long-press) | Overlay menu (cheats, gamma, volume, warp) |
 
 ### MicroPython + Tiny Game Engine
 
@@ -530,19 +573,39 @@ No two slots are in memory at the same time. Each slot has the whole 520 KB SRAM
 
 ## Flash layout
 
+Two layouts depending on `THUMBYONE_WITH_MD`:
+
+### Default build (`THUMBYONE_WITH_MD=ON`)
+
+NES slot is 2 MB to hold PicoDrive's precomputed tables; every downstream partition shifts +1 MB and the shared FAT loses 1 MB of ROM storage.
+
 | Partition  | Offset     | Size    | XIP address     | Purpose |
 |-----------:|-----------:|--------:|-----------------|---------|
 | Lobby      | `0x000000` | 128 KB  | `0x10000000`    | Selector, USB MSC, mkfs, handoff consumption |
 | Handoff sector | `0x010000` | 4 KB | `0x10010000`    | Cross-slot payload (bigger than watchdog scratch can hold) |
-| NES        | `0x020000` | 1 MB    | `0x10020000`    | ThumbyNES firmware |
+| NES        | `0x020000` | **2 MB** | `0x10020000`   | ThumbyNES + **MD (PicoDrive)** |
+| P8         | `0x220000` | 512 KB  | `0x10220000`    | ThumbyP8 firmware |
+| DOOM       | `0x2A0000` | 2.5 MB  | `0x102A0000`    | ThumbyDOOM + shareware WAD |
+| MPY        | `0x520000` | 2 MB    | `0x10520000`    | MicroPython + engine + 768 KB resource scratch |
+| P8 scratch | `0x720000` | 252 KB  | `0x10720000`    | P8 active-cart working area |
+| Settings sector | `0x75F000` | 4 KB | `0x1075F000`    | System-wide volume + brightness |
+| Shared FAT | `0x760000` | **8.6 MB** | `0x10760000` | `/roms`, `/carts`, `/games`, `/Saves`, `/.favs`, `/.active_game` |
+
+### Backward-compat build (`THUMBYONE_WITH_MD=OFF`)
+
+Original layout with 1 MB NES and full 9.6 MB FAT. MD emulation is excluded entirely (no `.md/.gen/.bin` support in the picker).
+
+| Partition  | Offset     | Size    | XIP address     | Purpose |
+|-----------:|-----------:|--------:|-----------------|---------|
+| NES        | `0x020000` | 1 MB    | `0x10020000`    | ThumbyNES (NES/SMS/GG/GB only) |
 | P8         | `0x120000` | 512 KB  | `0x10120000`    | ThumbyP8 firmware |
 | DOOM       | `0x1A0000` | 2.5 MB  | `0x101A0000`    | ThumbyDOOM + shareware WAD |
-| MPY        | `0x420000` | 2 MB    | `0x10420000`    | MicroPython + engine + 768 KB resource scratch |
-| P8 scratch | `0x620000` | 252 KB  | `0x10620000`    | P8 active-cart working area (survives reboots into other slots) |
-| Settings sector | `0x65F000` | 4 KB | `0x1065F000`    | System-wide volume + brightness. 8-byte header (`TSM1` magic + two bytes), rest is `0xFF`. Written by the lobby + any slot menu that moves a slider; read by every slot (including DOOM) via XIP — no FatFs required. |
-| Shared FAT | `0x660000` | 9.6 MB  | `0x10660000`    | `/roms`, `/carts`, `/games`, `/Saves`, `/.favs`, `/.active_game` |
+| MPY        | `0x420000` | 2 MB    | `0x10420000`    | MicroPython + engine |
+| P8 scratch | `0x620000` | 252 KB  | `0x10620000`    | — |
+| Settings sector | `0x65F000` | 4 KB | `0x1065F000`    | — |
+| Shared FAT | `0x660000` | 9.6 MB  | `0x10660000`    | — |
 
-Canonical source: [`common/slot_layout.h`](common/slot_layout.h). Keep it in lock-step with [`common/pt.json`](common/pt.json), which is the partition table consumed by the RP2350 bootrom.
+Canonical source: [`common/slot_layout.h`](common/slot_layout.h) (preprocessor-selects the layout based on `THUMBYONE_WITH_MD`). Must stay in lock-step with [`common/pt.json`](common/pt.json) (no-MD) and [`common/pt_with_md.json`](common/pt_with_md.json) (with-MD), which are the partition tables consumed by the RP2350 bootrom.
 
 ## Boot and handoff
 
@@ -564,7 +627,7 @@ Canonical source: [`common/slot_layout.h`](common/slot_layout.h). Keep it in loc
 
 ## Shared filesystem
 
-The 9.6 MB FAT at `0x10660000` is a plain FAT16 volume with 1 KB clusters, label `THUMBYONE`. All five participants (lobby + four slots) use the **same** FatFs R0.15 code, compiled from [`common/lib/fatfs/`](common/lib/fatfs/) with the same `ffconf.h`, linked against the same block device [`common/fs/thumbyone_disk.c`](common/fs/thumbyone_disk.c).
+The shared FAT is a plain FAT16 volume with 1 KB clusters, label `THUMBYONE`. Location and size depend on `THUMBYONE_WITH_MD`: **8.6 MB at `0x10760000`** in the default MD-enabled build, **9.6 MB at `0x10660000`** in the backward-compat build. All five participants (lobby + four slots) use the **same** FatFs R0.15 code, compiled from [`common/lib/fatfs/`](common/lib/fatfs/) with the same `ffconf.h`, linked against the same block device [`common/fs/thumbyone_disk.c`](common/fs/thumbyone_disk.c).
 
 **Only the lobby ever calls `f_mkfs()`.** Slots strictly mount-or-fail. This guarantees on-disk layout identity across slots — a FAT written by the NES slot is byte-compatible with a FAT read by the MPY slot.
 
@@ -587,7 +650,7 @@ Slots carry no tinyUSB stack at all in ThumbyOne-slot-mode builds. We strip tiny
 
 Every slot has a 520 KB SRAM budget and a ~250 MHz default clock (higher on overclock). Each has been individually tuned to maximise performance and compatibility while keeping RAM usage inside those limits. The lists below are the highlights — see the slot repos for the full story.
 
-### NES / SMS / GG / GB slot
+### NES / SMS / GG / GB / MD slot
 
 **Emulator cores** (all vendored under [`ThumbyNES/vendor/`](https://github.com/austinio7116/ThumbyNES/tree/main/vendor)):
 
@@ -595,17 +658,22 @@ Every slot has a 520 KB SRAM budget and a ~250 MHz default clock (higher on over
 - **smsplus** (GPLv2, from the retro-go fork) — Master System / Game Gear Z80 + VDP + PSG.
 - **Peanut-GB** (MIT) — Game Boy DMG + CGB core. Vendored from [fhoedemakers' fork](https://github.com/fhoedemakers/pico-peanutGB), which adds Game Boy Color support on top of Mahyar Koshkouei's original [Peanut-GB](https://github.com/deltabeard/Peanut-GB). Enabled via `PEANUT_FULL_GBC_SUPPORT`.
 - **minigb_apu** (MIT) — Game Boy 4-channel APU by Alex Baines, paired with Peanut-GB.
+- **PicoDrive** (LGPLv2, notaz master @ `dd762b8`) — Sega Mega Drive / Genesis. FAME 68K core + cz80 Z80 core + YM2612 FM + SN76489 PSG + VDP. Heavily patched for Cortex-M33 Thumb-2 (CZ80 function-pointer Thumb bit fix), XIP flash ROMs (`FAME_BIG_ENDIAN` + bswap-on-read in 17+ sites), heap-allocated statics (~4.4 MB of upstream BSS moved to heap), and build-time precomputed tables (FAME jumptable, YM2612 log-sine, cz80 SZHVC — ~730 KB of `const` flash data). Full catalogue: [`ThumbyNES/vendor/VENDORING.md`](https://github.com/austinio7116/ThumbyNES/blob/main/vendor/VENDORING.md#picodrive).
 
 **Performance & compatibility:**
 
-- **Multi-core dispatcher** (`nes_device_main.c`) switches between Nofrendo / smsplus / Peanut-GB based on file extension; only one core is linked into the hot path per cart.
-- **Per-cart clock override** — global + per-ROM selection of 125 / 150 / 200 / 250 MHz; dispatcher re-runs `nes_lcd_init` + `nes_audio_pwm_init` on every launch so SPI dividers and audio IRQ rate follow the new clock correctly.
+- **Multi-core dispatcher** (`nes_device_main.c`) switches between Nofrendo / smsplus / Peanut-GB / PicoDrive based on file extension; only one core is linked into the hot path per cart.
+- **Per-cart clock override** — global + per-ROM selection of 125 / 150 / 200 / 250 / 300 MHz; dispatcher re-runs `nes_lcd_init` + `nes_audio_pwm_init` on every launch so SPI dividers and audio IRQ rate follow the new clock correctly.
 - **Hot loops in SRAM** — `IRAM_ATTR` / `.time_critical.*` placement on the CPU+PPU inner loops so XIP cache misses never hit the frame budget. v1.01 also moved the smsplus Z80 core out of flash into RAM for a large SMS/GG speedup.
-- **Zero-copy XIP ROM execution** — the picker walks FAT cluster chains for any ROM ≥256 KB, checks contiguity, and hands the core a direct pointer into the XIP address space. Fragmented ROMs trigger the in-firmware defragmenter (`f_expand` reserves a contiguous chain, then streams the file through a 4 KB buffer).
-- **Per-system scalers** — NES 2:1 nearest or 2×2 box-blend to 128×120 letterbox; SMS FIT / BLEND / FILL (new 1.5× fill in v1.02); GG & GB asymmetric 5:4 × 9:8 nearest; a live-pan CROP mode where the cart keeps running while MENU + d-pad scrolls the 128-wide window over the native picture.
-- **Region detection** — iNES 2.0 byte-12, iNES 1.0 byte-9, with a filename fallback (`(E)`, `(PAL)`, `(Europe)`) — overridable per-ROM.
-- **Per-ROM save states** (NES / SMS: SNSS-tagged; GB: `'GBCS'`-tagged `gb_s` + APU memcpy) via a thin `thumby_state_bridge.[ch]` patch that macros `STATE_OPEN` / `STATE_WRITE` in nofrendo & smsplus over a single shared `FIL` for atomic save/load.
-- **Palette cycling** — six selectable palettes for NES and GB; SMS / GG drive their VDP palettes natively.
+- **MD dynamic IRAM** — PicoDrive's `Cz80_Exec` (17 KB hot Z80 dispatch loop) lives in a custom flash section (`.md_iram_pool`) and gets `memcpy`'d into a heap-allocated SRAM buffer at `mdc_init`, with a `--wrap=Cz80_Exec` linker thunk that indirects callers through a function pointer. Zero BSS cost across sibling cores — the 17 KB only occupies heap while MD is the active emulator. +2-3 ms/frame reclaimed vs flash execution.
+- **MD adaptive VDP skip-render** — when the last frame's emulation time overran the refresh budget, the next frame sets `PicoIn.skipFrame=1`, letting 68K + Z80 + audio emulate normally while the VDP line composite + `FinalizeLine` bail early. Caps at 2 consecutive skips. Saves ~6-8 ms on skipped frames; locks 50 PAL on heavy action scenes that would otherwise miss frames.
+- **MD runtime audio modes** (FULL / HALF / OFF) — per-cart menu item. FULL = 22050 Hz YM2612 + PSG + Z80. HALF = 11025 Hz YM2612 with ZOH upsample (halves FM cost ~2.5 ms, audible HF roll-off). OFF = `POPT_EN_Z80|FM|PSG` stripped (completely silent, maximum refresh).
+- **Zero-copy XIP ROM execution** — the picker walks FAT cluster chains for any ROM ≥256 KB, checks contiguity, and hands the core a direct pointer into the XIP address space. Fragmented ROMs trigger the in-firmware defragmenter (`f_expand` reserves a contiguous chain, then streams the file through a 4 KB buffer). MD's XIP path suppresses `PicoCartInsert`'s safety-op write (which would otherwise try to write 4 bytes to read-only flash).
+- **Per-system scalers** — NES 2:1 nearest or 2×2 box-blend to 128×120 letterbox; SMS FIT / BLEND / FILL (new 1.5× fill in v1.02); GG & GB asymmetric 5:4 × 9:8 nearest; MD per-line streamed downsample (640 B scratch, no full-frame buffer) with packed-RGB565 2×2 blend and sx-column LUT; FILL in MD preserves aspect (scale-by-height, crop X sides) to match SMS's FILL behaviour.
+- **Region detection** — iNES 2.0 byte-12, iNES 1.0 byte-9, with a filename fallback (`(E)`, `(PAL)`, `(Europe)`) — overridable per-ROM. MD uses PicoDrive's native header-based region detect (auto EU → US → JP preference).
+- **Per-ROM save states** (NES / SMS: SNSS-tagged; GB: `'GBCS'`-tagged `gb_s` + APU memcpy; MD: PicoDrive's native state chunks) via a thin `thumby_state_bridge.[ch]` patch that macros `STATE_OPEN` / `STATE_WRITE` in nofrendo & smsplus over a single shared `FIL` for atomic save/load. PicoDrive uses its own `PicoState` API routed through the same bridge.
+- **Battery SRAM** for all four families — NES battery (FCEUmm), SMS SRAM (smsplus), GB cart RAM, MD battery RAM (Sonic 3, Streets of Rage 2, etc.). 30 s autosave on change, `.sav` sidecar per cart.
+- **Palette cycling** — six selectable palettes for NES and GB; SMS / GG drive their VDP palettes natively; MD reads the CRAM directly (512-colour palette, no user override needed).
 - **Fast-forward 4× with audio preservation** — four cart frames per loop, only the newest rendered; audio ring untouched so FX don't stutter.
 - **30 s battery-SRAM autosave** + 90 s idle → LCD blank + tight sleep.
 - **Tabbed picker** with per-tab selection memory, favourites (hold B), 5–10 s B-hold to delete, live USB-activity rescan (polls MSC activity, rescans FAT after 400 ms of host quiet).
@@ -790,11 +858,12 @@ ThumbyOne is a top-level CMake project that composes four subproject firmwares p
 
 ## Build matrix
 
-The four slot flags default to `ON`. Flipping any to `OFF` excludes its subproject from the build **and** greys out its tile in the lobby.
+The slot flags default to `ON`. Flipping any to `OFF` excludes its subproject from the build **and** greys out its tile in the lobby. `THUMBYONE_WITH_MD` is a separate flag that controls whether the NES slot includes PicoDrive (Mega Drive emulation) — it's nested inside `THUMBYONE_WITH_NES`.
 
 ```
 cmake -B build_device -DCMAKE_BUILD_TYPE=Release \
       [-DTHUMBYONE_WITH_NES=ON|OFF] \
+      [-DTHUMBYONE_WITH_MD=ON|OFF]   \   # default ON, requires WITH_NES
       [-DTHUMBYONE_WITH_P8=ON|OFF] \
       [-DTHUMBYONE_WITH_DOOM=ON|OFF] \
       [-DTHUMBYONE_WITH_MPY=ON|OFF]
@@ -804,12 +873,16 @@ cmake --build build_device -j8
 
 Example sizes (release builds):
 
-| Configuration | UF2 size |
-|---|---:|
-| Full (all four) | 8.9 MB |
-| NES + P8 only | 2.2 MB |
-| MPY only | 3.2 MB |
-| DOOM only | 2.5 MB |
+| Configuration | UF2 size | FAT size |
+|---|---:|---:|
+| Full with MD (default) | 10.9 MB | 8.6 MB |
+| Full without MD | 8.9 MB | 9.6 MB |
+| NES + P8 only (with MD) | 4.2 MB | 8.6 MB |
+| NES + P8 only (no MD) | 2.2 MB | 9.6 MB |
+| MPY only | 3.2 MB | 9.6 MB |
+| DOOM only | 2.5 MB | 9.6 MB |
+
+The MD build adds ~2 MB to the UF2 (the picodrive library + its precomputed YM2612 / FAME / cz80 flash tables) and loses 1 MB of shared FAT to the enlarged NES partition.
 
 ## Build from source
 
