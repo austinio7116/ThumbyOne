@@ -1,6 +1,10 @@
 build/
 build_*/
 *.uf2
+# The repo-root prebuilt firmware images are the exception — they're
+# the one-click-download artifacts referenced from the README.
+!firmware_thumbyone.uf2
+!firmware_thumbyone_nomd.uf2
 *.elf
 *.bin
 *.map

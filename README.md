@@ -51,6 +51,19 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
 
 ## What's new in 1.05
 
+> ### ⚠️ Upgrading from 1.04 or earlier — back up first
+>
+> The 1.05 default build shifts every partition up by 1 MB to make room for the enlarged Mega Drive / Genesis ROM / tables area in the NES slot. The shared FAT therefore moves from `0x660000` (9.6 MB) to `0x760000` (**8.6 MB**) — a different on-disk location AND 1 MB smaller. When you flash 1.05 the lobby sees no valid FAT header at the new offset and **auto-formats** a fresh volume on first boot. **Everything on your ThumbyOne USB drive is wiped.**
+>
+> Back up first, every time:
+> 1. Boot into the 1.04 lobby (or any slot, then back to lobby).
+> 2. Plug in USB — the device enumerates as `ThumbyOne Storage`.
+> 3. Copy everything off — `/roms/`, `/carts/`, `/games/`, `/Saves/`, `/.favs`, `/.active_game`, and the hidden `/.volume` / `/.brightness` settings if you care about those.
+> 4. Eject, unplug, flash 1.05, plug back in.
+> 5. Copy as much back as fits in **8.6 MB**. If you were near-full on 1.04 you'll need to trim something — typically the largest ROMs or a couple of MicroPython games with big assets. The per-slot picker's `Disk` row in the settings menu tells you exactly how full the new FAT is after each write.
+>
+> If you don't need Mega Drive / Genesis support at all, you can skip the migration hassle by building / flashing with `-DTHUMBYONE_WITH_MD=OFF` instead (see the [Build matrix](#build-matrix)). That keeps the original layout (9.6 MB FAT at `0x660000`) and the FAT you already had on 1.04 will mount untouched — no format, no data loss. You just don't get MD.
+
 - **Sega Mega Drive / Genesis support** via vendored
   [PicoDrive](https://github.com/notaz/picodrive) (LGPLv2), integrated
   into the ThumbyNES slot. Drop `.md` / `.gen` / `.bin` into `/roms/`;
@@ -79,6 +92,27 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
   Load / Options / Quit). The cross-slot handoff from DOOM's
   overlay menu to the lobby is now wired up — no need to route
   through Main Menu → Quit Game any more.
+
+- **DOOM front-LED health indicator.** The device's front RGB LED
+  now smoothly tracks player HP during gameplay — pure green at
+  100, yellow around 50, pure red at 0. Handy for peripheral-vision
+  awareness while your eyes are locked on the tiny screen. Hidden
+  on the title screen / demo playback (LED stays at boot idle
+  green). The blend is gamma-balanced against the Thumby's LED dies
+  — raw `(R=255, G=255)` reads almost-red because the green die is
+  dimmer than red at equal duty, so the "yellow" midpoint caps red
+  at ~96 to get a visually-balanced yellow. Zero perceptible cost —
+  new PWM writes only fire when HP actually changes.
+
+- **Consistent front-LED behaviour across every slot.** The LED now
+  reads `/.brightness` on every slot entry (DOOM too — previously it
+  flashed white at full brightness on load), stays dark during the
+  chain_image handoff between slots (no white flash between tiles),
+  and tracks the brightness slider live as you drag it in every
+  picker and in-game menu. New shared `thumbyone_slot_init_brightness_and_led()`
+  helper + live `on_change` callback plumbed through the menu slider
+  rows — every slot now drives the LED through the same code path
+  with the same PWM policy.
 
 - **Battery module raw-ADC diagnostics** exposed via a new accessor
   so the picker / in-game overlays can show counts for debugging,
@@ -161,7 +195,7 @@ See the [MENU overlay](#the-lobby) and per-slot menus for the slider rows; the [
 >
 > Flashing ThumbyOne **replaces the stock TinyCircuits firmware** with a completely different system. This is a full takeover, not an overlay:
 >
-> - **The TinyCircuits launcher, stock games, and system files will be gone.** The 9.6 MB shared FAT is formatted on first boot of ThumbyOne — anything you had on the device (saves, scores, installed games) is wiped.
+> - **The TinyCircuits launcher, stock games, and system files will be gone.** The shared FAT (8.6 MB in the default MD-enabled build, 9.6 MB with `THUMBYONE_WITH_MD=OFF`) is formatted on first boot of ThumbyOne — anything you had on the device (saves, scores, installed games) is wiped.
 > - The device is easy to flash back to stock afterwards — just drop the official TinyCircuits `.uf2` onto the bootloader drive the same way. But stock firmware **doesn't expose a USB drive** — to back up anything from stock first (e.g. save files under `/Saves/`), connect via [Thonny](https://color.thumby.us/pages/getting-started-with-thonny/getting-started-with-thonny/) or `mpremote` and pull files over the REPL. Do that **before** flashing ThumbyOne.
 > - ThumbyOne uses its own filesystem layout (`/roms/`, `/carts/`, `/games/`) — stock `/Games/` Python games won't be visible until you move them into `/games/`.
 > - There is **no going back to stock with your data intact** once ThumbyOne has first-booted.
@@ -173,6 +207,10 @@ See the [MENU overlay](#the-lobby) and per-slot menus for the slider rows; the [
 ### 1. Flash the firmware
 
 **Download** `firmware_thumbyone.uf2` from the root of this repo (or the latest [release](https://github.com/austinio7116/ThumbyOne/releases)) — or [build from source](#build-matrix).
+
+> **Already running ThumbyOne 1.04 or earlier?** The 1.05 default build **moves the shared FAT and resizes it from 9.6 MB to 8.6 MB** to make room for Mega Drive / Genesis emulation. The old FAT is invisible to 1.05 — it gets auto-formatted on first boot and everything on it is wiped. **Back up `/roms/`, `/carts/`, `/games/`, `/Saves/` etc. over USB from 1.04 first** (instructions above in the [1.05 changelog callout](#whats-new-in-105)). After flashing, copy back as much as fits — the new ceiling is 8.6 MB.
+>
+> If you don't want Mega Drive / Genesis support, flash a `THUMBYONE_WITH_MD=OFF` build instead — keeps the original 9.6 MB FAT layout so your existing volume mounts untouched. The `firmware_thumbyone_nomd.uf2` file at the repo root is a prebuilt WITH_MD=OFF image.
 
 1. Power off the Thumby Color.
 2. Hold **DOWN** on the d-pad and plug in USB.
@@ -186,7 +224,7 @@ With ThumbyOne running, plug the device in (while sitting in the **lobby**). It 
 
 | Content | Folder | File types |
 |---|---|---|
-| NES / SMS / GG / GB ROMs | `/roms/` | `.nes`, `.sms`, `.gg`, `.gb`, `.gbc` |
+| NES / SMS / GG / GB / MD ROMs | `/roms/` | `.nes`, `.sms`, `.gg`, `.gb`, `.gbc`, `.md`, `.gen`, `.bin` |
 | PICO-8 carts | `/carts/` | `.p8.png` |
 | MicroPython games | `/games/<Name>/` | Folder per game with `main.py`, `icon.bmp`, `arcade_description.txt`, assets |
 
@@ -290,7 +328,7 @@ Two escape hatches for when something goes wrong:
 
 **Hold MENU at boot** → forces the lobby even if a pending slot-chain would otherwise try to start a broken slot. Useful after a bad flash or a hang.
 
-**Hold LB + RB at boot** → the lobby prompts you to keep both held for a one-second countdown, then wipes and reformats the whole 9.6 MB shared FAT. Erases all ROMs, carts, games, and saves. Only needed if the FAT itself is corrupt (no slot can read it, or the PC says "unformatted disk").
+**Hold LB + RB at boot** → the lobby prompts you to keep both held for a one-second countdown, then wipes and reformats the whole shared FAT (8.6 MB in the default MD-enabled build, 9.6 MB in `THUMBYONE_WITH_MD=OFF` builds). Erases all ROMs, carts, games, and saves. Only needed if the FAT itself is corrupt (no slot can read it, or the PC says "unformatted disk").
 
 No driver weirdness, no Windows Format dialog, no `mpremote` incantations. LB + RB at boot is the canonical wipe.
 
@@ -298,7 +336,7 @@ No driver weirdness, no Windows Format dialog, no `mpremote` incantations. LB + 
 
 ## The systems
 
-### ThumbyNES — NES / Master System / Game Gear / Game Boy / Mega Drive
+### ThumbyNES — NES / Master System / Game Gear / Game Boy / Mega Drive / Genesis
 
 *Based on [ThumbyNES](https://github.com/austinio7116/ThumbyNES) — see that repo for the standalone firmware, the full feature list, and detailed docs.*
 
@@ -407,6 +445,7 @@ The real deal. Music, sound effects, save games, screen melts, all on a 128×128
 - 12-bit PWM DAC audio with dithering — OPL2 music (via [emu8950](https://github.com/digital-sound-antiques/emu8950)) + 8-channel ADPCM SFX mixed on core1
 - Save / load to flash (6 save slots)
 - Overlay menu (**MENU long-press**) with brightness, gamma, volume, controls scheme, and cheats (god / all-weapons / no-clip / level warp)
+- **Front-LED health indicator** — smooth green → yellow → red blend as HP drops from 100 → 0. Hidden on title / demo; only active during actual gameplay. Gamma-balanced against the Thumby's LED dies (green die is dimmer than red, so "yellow" caps R at ~96/255 for a visually-balanced midpoint).
 - Persistent settings (slot 7) survive power cycles
 
 **ThumbyOne differences:**
@@ -858,7 +897,7 @@ ThumbyOne is a top-level CMake project that composes four subproject firmwares p
 
 ## Build matrix
 
-The slot flags default to `ON`. Flipping any to `OFF` excludes its subproject from the build **and** greys out its tile in the lobby. `THUMBYONE_WITH_MD` is a separate flag that controls whether the NES slot includes PicoDrive (Mega Drive emulation) — it's nested inside `THUMBYONE_WITH_NES`.
+The slot flags default to `ON`. Flipping any to `OFF` excludes its subproject from the build **and** greys out its tile in the lobby. `THUMBYONE_WITH_MD` is a separate flag that controls whether the NES slot includes PicoDrive (Mega Drive / Genesis emulation) — it's nested inside `THUMBYONE_WITH_NES`.
 
 ```
 cmake -B build_device -DCMAKE_BUILD_TYPE=Release \
