@@ -38,6 +38,7 @@
 
 static bool g_inited = false;
 static uint g_offset = 0;
+static uint8_t g_last_value = THUMBYONE_BACKLIGHT_DEFAULT;
 
 /* Load PWM value X into PIO X scratch: pull from TX FIFO. */
 static void pio_pwm_set_level(uint32_t level) {
@@ -87,6 +88,17 @@ void thumbyone_backlight_set(uint8_t value) {
      * → 256/256 duty (fully on). Direct mapping — pass the
      * brightness byte straight through. */
     pio_pwm_set_level((uint32_t)value);
+    g_last_value = value;
+}
+
+uint8_t thumbyone_backlight_get(void) {
+    return g_last_value;
+}
+
+void thumbyone_backlight_track(uint8_t value) {
+    if (value < THUMBYONE_BACKLIGHT_FLOOR)
+        value = THUMBYONE_BACKLIGHT_FLOOR;
+    g_last_value = value;
 }
 
 void thumbyone_backlight_release(void) {

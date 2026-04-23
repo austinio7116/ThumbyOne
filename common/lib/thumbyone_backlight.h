@@ -56,6 +56,25 @@ void thumbyone_backlight_set(uint8_t value);
  * cleanly). */
 void thumbyone_backlight_release(void);
 
+/* Return the last value passed to thumbyone_backlight_set(), post-
+ * floor clamp. Meant as a live "what's on the screen right now"
+ * value that other surfaces (front LED, etc.) can read to stay in
+ * sync with the slider without waiting for flash-write latency.
+ * Returns THUMBYONE_BACKLIGHT_DEFAULT before the first set. */
+uint8_t thumbyone_backlight_get(void);
+
+/* Update the tracked brightness value WITHOUT touching the PIO /
+ * GP7 hardware. For slots where a different driver owns GP7 (the
+ * MPY slot's engine-managed GC9107 has its own PIO PWM on GP7 —
+ * calling thumbyone_backlight_set there would double-load the PIO
+ * program). The engine / slot still drives the actual backlight;
+ * this call just keeps thumbyone_backlight_get() in sync with the
+ * slider so readers like the front LED indicator see live values
+ * instead of the default-255 at slot startup. Applies the same
+ * FLOOR clamp as _set so readers see identical values regardless
+ * of which entry point populated them. */
+void thumbyone_backlight_track(uint8_t value);
+
 #ifdef __cplusplus
 }
 #endif
