@@ -815,6 +815,7 @@ static void render_hero(int sel) {
  * /.volume for the engine-bridge logic in thumbyone_launcher. */
 #include "thumbyone_settings.h"
 #include "thumbyone_backlight.h"
+#include "thumbyone_led.h"
 
 /* In-place darken the framebuffer to ~1/4 brightness, per-channel.
  * Copy of ThumbyNES nes_menu.c's darken_fb — kept verbatim so the
@@ -1243,8 +1244,13 @@ int thumbyone_picker_run(void) {
                         g_menu_bri -= step;
                         if (g_menu_bri < 0) g_menu_bri = 0;
                         /* Live-apply brightness so the user sees the
-                         * dim/brighten as they slide. */
+                         * dim/brighten as they slide. Also repaint
+                         * the front RGB LED at the new slider level
+                         * — without this the LED stays at whatever
+                         * the surrounding slot left it and doesn't
+                         * visibly track the slider. */
                         thumbyone_backlight_set((uint8_t)g_menu_bri);
+                        thumbyone_led_set_rgb(0, 255, 0);
                         dirty = true;
                     }
                 } else if (lt_edge) {
@@ -1262,6 +1268,7 @@ int thumbyone_picker_run(void) {
                         g_menu_bri += step;
                         if (g_menu_bri > THUMBYONE_BRIGHTNESS_MAX) g_menu_bri = THUMBYONE_BRIGHTNESS_MAX;
                         thumbyone_backlight_set((uint8_t)g_menu_bri);
+                        thumbyone_led_set_rgb(0, 255, 0);
                         dirty = true;
                     }
                 } else if (rt_edge) {

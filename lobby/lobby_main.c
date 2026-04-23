@@ -26,6 +26,8 @@
 #include "slot_layout.h"
 #include "ff.h"
 #include "thumbyone_fs.h"
+#include "thumbyone_settings.h"
+#include "thumbyone_backlight.h"
 
 #include "lcd_gc9107.h"
 #include "font.h"
@@ -233,12 +235,52 @@ static bool confirm_erase_chord(void) {
 #define PIN_LED_B   12   /* PWM6 A */
 #define LED_PWM_WRAP 2048
 
-/* Set the LED to a normalised RGB triple (each 0..255). */
+/* Ceiling applied on top of the brightness slider. At slider = 255
+ * (max) the peak LED duty cycle is LED_MAX_ON_PCT / 100. The raw
+ * hardware LED is uncomfortably bright at 100 % duty; 80 % is the
+ * nominal "brightest" the user sees — bumped from 63 % on 2026-04-23
+ * because the old cap felt too dim as the top-of-slider level. Keep
+ * in sync with common/lib/thumbyone_led.c and engine_io_rp3.c. */
+#define LED_MAX_ON_PCT  80
+
+/* Minimum on-time applied per-channel when the caller requested a
+ * non-zero value. Floors low brightness slider values so the USB
+ * indicator (and especially the dim blue LED die) stays visible.
+ * 180 = ~9 % duty at WRAP 2048 (was 100 ≈ 5 %). */
+#define LED_ON_TIME_FLOOR 180
+
+/* Scale a single channel (0..255) to the PWM off-time (counts
+ * pin-HIGH per cycle; common-anode means more off-time = less
+ * bright). Brightness slider and LED_MAX_ON_PCT ceiling are
+ * composed in: at slider=255 channel=255 peak is LED_MAX_ON_PCT %
+ * of LED_PWM_WRAP; slider dims linearly below that; channel=0
+ * always lands at fully-off regardless of slider. uint64 math
+ * because the intermediate (channel × slider × PCT × WRAP) can
+ * exceed 2^32 at the top end. */
+static inline uint16_t led_channel_offtime(int channel, uint8_t slider) {
+    uint64_t on = (uint64_t)channel * slider * LED_MAX_ON_PCT * LED_PWM_WRAP;
+    uint64_t denom = 255ull * 255ull * 100ull;
+    uint32_t on_time = (uint32_t)(on / denom);
+    if (channel > 0 && on_time < LED_ON_TIME_FLOOR) on_time = LED_ON_TIME_FLOOR;
+    if (on_time > LED_PWM_WRAP) on_time = LED_PWM_WRAP;
+    return (uint16_t)(LED_PWM_WRAP - on_time);
+}
+
+/* Set the LED to a normalised RGB triple (each 0..255). Each
+ * channel is scaled by the LIVE system-wide brightness slider AND
+ * clamped to LED_MAX_ON_PCT, so a low-brightness session dims the
+ * LED to match the screen instead of leaving it on full blast.
+ * Reads the live value from the backlight module (not from flash)
+ * so menu-slider drags update the LED in real time, before the
+ * user commits the change on menu close. */
 static void led_set_rgb(int r, int g, int b) {
-    /* Invert for common-anode. Scale 0..255 → 0..2047. */
-    pwm_set_gpio_level(PIN_LED_R, (uint16_t)((255 - r) * LED_PWM_WRAP / 255));
-    pwm_set_gpio_level(PIN_LED_G, (uint16_t)((255 - g) * LED_PWM_WRAP / 255));
-    pwm_set_gpio_level(PIN_LED_B, (uint16_t)((255 - b) * LED_PWM_WRAP / 255));
+    uint8_t slider = 255;
+#if PICO_ON_DEVICE
+    slider = thumbyone_backlight_get();
+#endif
+    pwm_set_gpio_level(PIN_LED_R, led_channel_offtime(r, slider));
+    pwm_set_gpio_level(PIN_LED_G, led_channel_offtime(g, slider));
+    pwm_set_gpio_level(PIN_LED_B, led_channel_offtime(b, slider));
 }
 
 static void led_set_off(void)    { led_set_rgb(0, 0, 0); }
@@ -447,9 +489,15 @@ static void dim_tile(int x, int y, int shift) {
 
 /* System labels — shown at the bottom of the screen under the
  * selected tile. Order matches the grid layout + lobby_icons[] /
- * g_grid_slot_order[]. */
+ * g_grid_slot_order[]. The NES tile's label picks up /MD under
+ * WITH_MD builds so the user sees at a glance that the slot also
+ * runs Mega Drive / Genesis ROMs. */
 static const char *const g_grid_labels[4] = {
+#if defined(THUMBYONE_WITH_MD) && THUMBYONE_WITH_MD
+    "NES / SMS / GG / GB / MD",
+#else
     "NES / SMS / GG / GB",
+#endif
     "PICO-8",
     "DOOM",
     "MICROPYTHON",
@@ -976,9 +1024,15 @@ static bool lobby_menu_open(void) {
         }
         /* Brightness live-apply (no FAT write per click — that would
          * starve the audio path with f_write latency and also make
-         * the slider feel laggy). FAT write happens once at close. */
+         * the slider feel laggy). FAT write happens once at close.
+         * Re-paint the USB row so its LED picks up the new slider
+         * value too; without this the front LED only tracks the
+         * slider on the next USB state change (plug/unplug etc) or
+         * after a reboot. draw_usb_row is cheap — a 28×10 blit
+         * plus three PWM level writes. */
         if (dirty && cursor == LMI_BRIGHT) {
             thumbyone_backlight_set((uint8_t)g_menu_brightness);
+            draw_usb_row(g_usb_row_state);
         }
         bool close_menu = false;
         if (a && !prev_a && cursor == LMI_CLOSE) close_menu = true;
