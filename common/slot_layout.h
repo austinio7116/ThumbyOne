@@ -63,18 +63,35 @@ static inline int thumbyone_slot_partition_id(thumbyone_slot_t s) {
 #define THUMBYONE_HANDOFF_SECTOR_OFFSET   0x010000u   /* 64 KB in */
 #define THUMBYONE_HANDOFF_SECTOR_SIZE     (4u * 1024u)
 
-/* Partition offsets and sizes — must match pt.json exactly. */
-#define THUMBYONE_NES_OFFSET          0x020000u   /* 128 KB */
-#define THUMBYONE_NES_SIZE            (1024u * 1024u)
-
-#define THUMBYONE_P8_OFFSET           0x120000u   /* 1152 KB */
-#define THUMBYONE_P8_SIZE             (512u * 1024u)
-
-#define THUMBYONE_DOOM_OFFSET         0x1A0000u   /* 1664 KB */
-#define THUMBYONE_DOOM_SIZE           (2560u * 1024u)
-
-#define THUMBYONE_MPY_OFFSET          0x420000u   /* 4224 KB */
-#define THUMBYONE_MPY_SIZE            (2048u * 1024u)
+/* Partition offsets and sizes — must match pt.json (or, when
+ * THUMBYONE_WITH_MD is defined, pt_with_md.json) exactly.
+ *
+ * Two layouts:
+ *   Default (THUMBYONE_WITH_MD undefined / 0):
+ *     NES=1 MB, matches the original NES+SMS+GG+GB footprint. Used
+ *     for backward-compat builds that want the full 9.6 MB FAT.
+ *   WITH_MD (THUMBYONE_WITH_MD=1):
+ *     NES=2 MB to hold PicoDrive's precomputed YM2612/FAME/cz80
+ *     flash tables (~850 KB). Every partition shifts up 1 MB; the
+ *     shared FAT shrinks from 9.6 MB to 8.6 MB. */
+#define THUMBYONE_NES_OFFSET          0x020000u   /* 128 KB — unchanged */
+#if defined(THUMBYONE_WITH_MD) && THUMBYONE_WITH_MD
+#  define THUMBYONE_NES_SIZE          (2048u * 1024u)
+#  define THUMBYONE_P8_OFFSET         0x220000u   /* 2176 KB */
+#  define THUMBYONE_P8_SIZE           (512u * 1024u)
+#  define THUMBYONE_DOOM_OFFSET       0x2A0000u   /* 2688 KB */
+#  define THUMBYONE_DOOM_SIZE         (2560u * 1024u)
+#  define THUMBYONE_MPY_OFFSET        0x520000u   /* 5248 KB */
+#  define THUMBYONE_MPY_SIZE          (2048u * 1024u)
+#else
+#  define THUMBYONE_NES_SIZE          (1024u * 1024u)
+#  define THUMBYONE_P8_OFFSET         0x120000u   /* 1152 KB */
+#  define THUMBYONE_P8_SIZE           (512u * 1024u)
+#  define THUMBYONE_DOOM_OFFSET       0x1A0000u   /* 1664 KB */
+#  define THUMBYONE_DOOM_SIZE         (2560u * 1024u)
+#  define THUMBYONE_MPY_OFFSET        0x420000u   /* 4224 KB */
+#  define THUMBYONE_MPY_SIZE          (2048u * 1024u)
+#endif
 
 /* P8 active-cart scratch region. Not a partition — P8 owns it,
  * erases and reprograms it per cart launch. Survives reboots
@@ -85,7 +102,11 @@ static inline int thumbyone_slot_partition_id(thumbyone_slot_t s) {
  * below). P8 erases / programs only up to SIZE, leaving the mirror
  * untouched. Net P8 cart space: 252 KB — still plenty (the
  * biggest compressed cart we've seen is < 64 KB). */
-#define THUMBYONE_P8_SCRATCH_OFFSET   0x620000u   /* 6272 KB */
+#if defined(THUMBYONE_WITH_MD) && THUMBYONE_WITH_MD
+#  define THUMBYONE_P8_SCRATCH_OFFSET 0x720000u   /* 7296 KB */
+#else
+#  define THUMBYONE_P8_SCRATCH_OFFSET 0x620000u   /* 6272 KB */
+#endif
 #define THUMBYONE_P8_SCRATCH_SIZE     (252u * 1024u)
 
 /* Cross-slot settings mirror — one 4 KB flash sector that the
@@ -103,13 +124,23 @@ static inline int thumbyone_slot_partition_id(thumbyone_slot_t s) {
  * FatFs write. Readers (including DOOM) must tolerate a stale
  * mirror — the FatFs copy is the source of truth; the mirror is
  * just DOOM's view. */
-#define THUMBYONE_SETTINGS_MIRROR_OFFSET  0x65F000u   /* 6524 KB */
+#if defined(THUMBYONE_WITH_MD) && THUMBYONE_WITH_MD
+#  define THUMBYONE_SETTINGS_MIRROR_OFFSET 0x75F000u   /* 7548 KB */
+#else
+#  define THUMBYONE_SETTINGS_MIRROR_OFFSET 0x65F000u   /* 6524 KB */
+#endif
 #define THUMBYONE_SETTINGS_MIRROR_SIZE    (4u * 1024u)
 
 /* Shared FAT volume consumes the rest of flash. Not a partition —
  * lobby and each slot access it via the common FatFs diskio
- * driver as raw flash reads/writes. */
-#define THUMBYONE_FAT_OFFSET          0x660000u   /* 6528 KB */
+ * driver as raw flash reads/writes. WITH_MD shifts the FAT up
+ * by 1 MB to make room for the enlarged NES partition, reducing
+ * the ROM-storage area from 9.6 MB to 8.6 MB. */
+#if defined(THUMBYONE_WITH_MD) && THUMBYONE_WITH_MD
+#  define THUMBYONE_FAT_OFFSET        0x760000u   /* 7552 KB */
+#else
+#  define THUMBYONE_FAT_OFFSET        0x660000u   /* 6528 KB */
+#endif
 #define THUMBYONE_FAT_SIZE            (THUMBYONE_FLASH_SIZE - THUMBYONE_FAT_OFFSET)
 
 /* Convenience: XIP (read) addresses for each region. Use for

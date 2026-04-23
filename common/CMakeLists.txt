@@ -90,9 +90,16 @@ set(THUMBYONE_PICKER_INCLUDE
     ${CMAKE_CURRENT_SOURCE_DIR}/picker
     PARENT_SCOPE)
 
-set(THUMBYONE_PT_JSON
-    ${CMAKE_CURRENT_SOURCE_DIR}/pt.json
-    PARENT_SCOPE)
+if (THUMBYONE_WITH_MD)
+    # NES partition grows from 1 MB to 2 MB to fit PicoDrive's tables.
+    set(THUMBYONE_PT_JSON
+        ${CMAKE_CURRENT_SOURCE_DIR}/pt_with_md.json
+        PARENT_SCOPE)
+else()
+    set(THUMBYONE_PT_JSON
+        ${CMAKE_CURRENT_SOURCE_DIR}/pt.json
+        PARENT_SCOPE)
+endif()
 
 # Shared battery helper — ADC sampling + EMA smoothing + percent /
 # charging hysteresis. Consumed by every slot (NES, P8, DOOM, MPY
@@ -131,6 +138,19 @@ set(THUMBYONE_COMMON_BACKLIGHT_SRC
     PARENT_SCOPE)
 
 set(THUMBYONE_COMMON_BACKLIGHT_INCLUDE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    PARENT_SCOPE)
+
+# Shared front-RGB-indicator driver — GP10/11/12, brightness-scaled
+# from thumbyone_backlight_get() with a ~63 % peak-duty cap so the
+# LED dims with the screen instead of blinding the user. Consumed
+# by the lobby (USB indicator) and the common picker (live LED
+# repaint on slider drag). Depends on thumbyone_backlight.
+set(THUMBYONE_COMMON_LED_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/thumbyone_led.c
+    PARENT_SCOPE)
+
+set(THUMBYONE_COMMON_LED_INCLUDE
     ${CMAKE_CURRENT_SOURCE_DIR}/lib
     PARENT_SCOPE)
 

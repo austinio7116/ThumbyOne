@@ -47,6 +47,22 @@ option(THUMBYONE_WITH_NES  "Include ThumbyNES firmware"  ON)
 option(THUMBYONE_WITH_P8   "Include ThumbyP8 firmware"   ON)
 option(THUMBYONE_WITH_DOOM "Include ThumbyDOOM firmware" ON)
 option(THUMBYONE_WITH_MPY  "Include MicroPython firmware" ON)
+# THUMBYONE_WITH_MD: include the Mega Drive / Genesis core (PicoDrive)
+# in ThumbyNES. MD's precomputed flash tables (FAME jumptable + YM2612
+# + cz80) add ~850 KB, pushing ThumbyNES past the default 1 MB NES
+# partition. WITH_MD=ON grows the NES partition to 2 MB and shifts
+# every downstream partition + the FAT up by 1 MB (FAT goes from 9.6
+# MB to 8.6 MB of shared ROM storage). WITH_MD=OFF keeps the original
+# partition layout for backward-compatible smaller firmware builds.
+option(THUMBYONE_WITH_MD   "Include Mega Drive (PicoDrive) in ThumbyNES" ON)
+if (THUMBYONE_WITH_MD AND NOT THUMBYONE_WITH_NES)
+    message(FATAL_ERROR "THUMBYONE_WITH_MD requires THUMBYONE_WITH_NES — MD lives inside the NES slot.")
+endif()
+# Propagate as a compile define into the lobby + every slot so
+# slot_layout.h picks the matching partition offsets.
+if (THUMBYONE_WITH_MD)
+    add_compile_definitions(THUMBYONE_WITH_MD=1)
+endif()
 
 # ----- Shared library --------------------------------------------------
 # Brings in the handoff API + slot_layout.h + THUMBYONE_PT_JSON.
@@ -85,6 +101,7 @@ add_executable(lobby
     ${THUMBYONE_COMMON_BATTERY_SRC}
     ${THUMBYONE_COMMON_FS_STATS_SRC}
     ${THUMBYONE_COMMON_BACKLIGHT_SRC}
+    ${THUMBYONE_COMMON_LED_SRC}
     ${THUMBYONE_COMMON_SETTINGS_SRC}
 )
 target_include_directories(lobby PRIVATE
@@ -95,6 +112,7 @@ target_include_directories(lobby PRIVATE
     ${THUMBYONE_COMMON_BATTERY_INCLUDE}
     ${THUMBYONE_COMMON_FS_STATS_INCLUDE}
     ${THUMBYONE_COMMON_BACKLIGHT_INCLUDE}
+    ${THUMBYONE_COMMON_LED_INCLUDE}
     ${THUMBYONE_COMMON_SETTINGS_INCLUDE}
 )
 # tusb_config.h lives in lobby/ — put the lobby dir BEFORE the
@@ -171,8 +189,15 @@ if (THUMBYONE_WITH_P8)
     set(P8_TARGET p8run_device)
     list(APPEND THUMBYONE_SLOT_UF2_INPUTS
         ${CMAKE_BINARY_DIR}/p8_slot/${P8_TARGET}.uf2)
-    list(APPEND THUMBYONE_SLOT_UF2_REBASES
-        "${P8_TARGET}.uf2=0x10000000:0x10120000")
+    # P8 base addr: 0x10120000 default (after 1 MB NES partition),
+    # 0x10220000 when WITH_MD=ON (after 2 MB NES partition).
+    if (THUMBYONE_WITH_MD)
+        list(APPEND THUMBYONE_SLOT_UF2_REBASES
+            "${P8_TARGET}.uf2=0x10000000:0x10220000")
+    else()
+        list(APPEND THUMBYONE_SLOT_UF2_REBASES
+            "${P8_TARGET}.uf2=0x10000000:0x10120000")
+    endif()
     list(APPEND THUMBYONE_SLOT_DEPS ${P8_TARGET})
 endif()
 
@@ -191,8 +216,14 @@ if (THUMBYONE_WITH_DOOM)
     set(DOOM_TARGET thumbydoom)
     list(APPEND THUMBYONE_SLOT_UF2_INPUTS
         ${CMAKE_BINARY_DIR}/doom_slot/${DOOM_TARGET}.uf2)
-    list(APPEND THUMBYONE_SLOT_UF2_REBASES
-        "${DOOM_TARGET}.uf2=0x10000000:0x101A0000")
+    # DOOM base addr shifts +0x100000 when WITH_MD=ON.
+    if (THUMBYONE_WITH_MD)
+        list(APPEND THUMBYONE_SLOT_UF2_REBASES
+            "${DOOM_TARGET}.uf2=0x10000000:0x102A0000")
+    else()
+        list(APPEND THUMBYONE_SLOT_UF2_REBASES
+            "${DOOM_TARGET}.uf2=0x10000000:0x101A0000")
+    endif()
     list(APPEND THUMBYONE_SLOT_DEPS ${DOOM_TARGET})
 endif()
 
@@ -251,6 +282,13 @@ if (THUMBYONE_WITH_MPY)
     # element CMake lists across ExternalProject_Add is awkward
     # because of semicolon mangling, so we hand over the tree root
     # and let the consumer figure out the rest.
+    # Propagate THUMBYONE_WITH_MD so mpconfigboard.h picks the
+     # matching FAT base (shifted +1 MB when MD grows the NES slot).
+    if (THUMBYONE_WITH_MD)
+        set(MPY_WITH_MD_FLAG -DTHUMBYONE_WITH_MD=1)
+    else()
+        set(MPY_WITH_MD_FLAG -DTHUMBYONE_WITH_MD=0)
+    endif()
     ExternalProject_Add(mpy_slot
         SOURCE_DIR     ${MPY_SRC_DIR}
         BINARY_DIR     ${MPY_BUILD_DIR}
@@ -261,14 +299,21 @@ if (THUMBYONE_WITH_MPY)
             -DTHUMBYONE_SLOT_MODE=mpy
             -DTHUMBYONE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+            ${MPY_WITH_MD_FLAG}
         BUILD_BYPRODUCTS ${MPY_UF2}
         INSTALL_COMMAND ""
         BUILD_ALWAYS 1
     )
 
     list(APPEND THUMBYONE_SLOT_UF2_INPUTS ${MPY_UF2})
-    list(APPEND THUMBYONE_SLOT_UF2_REBASES
-        "firmware.uf2=0x10000000:0x10420000")
+    # MPY base addr shifts +0x100000 when WITH_MD=ON.
+    if (THUMBYONE_WITH_MD)
+        list(APPEND THUMBYONE_SLOT_UF2_REBASES
+            "firmware.uf2=0x10000000:0x10520000")
+    else()
+        list(APPEND THUMBYONE_SLOT_UF2_REBASES
+            "firmware.uf2=0x10000000:0x10420000")
+    endif()
     list(APPEND THUMBYONE_SLOT_DEPS mpy_slot)
 endif()
 

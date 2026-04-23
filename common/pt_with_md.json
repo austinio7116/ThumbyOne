@@ -1,0 +1,62 @@
+{
+  "_comment": "Partition table used when THUMBYONE_WITH_MD=ON. NES slot is enlarged to 2 MB to hold PicoDrive's YM2612 + FAME + cz80 flash tables (~850 KB) on top of the nofrendo+smsplus+peanut_gb baseline. Every subsequent partition shifts up by 1 MB, and the shared FAT loses 1 MB of ROM storage. Backward-compat build uses common/pt.json with a 1 MB NES slot and no MD emulation.",
+  "version": [1, 0],
+  "unpartitioned": {
+    "families": ["absolute"],
+    "permissions": {
+      "secure": "rw",
+      "nonsecure": "rw",
+      "bootloader": "rw"
+    }
+  },
+  "partitions": [
+    {
+      "name": "NES",
+      "id": 0,
+      "start": "128K",
+      "size": "2048K",
+      "families": ["absolute"],
+      "permissions": {
+        "secure": "rw",
+        "nonsecure": "rw",
+        "bootloader": "rw"
+      }
+    },
+    {
+      "name": "P8",
+      "id": 1,
+      "start": "2176K",
+      "size": "512K",
+      "families": ["absolute"],
+      "permissions": {
+        "secure": "rw",
+        "nonsecure": "rw",
+        "bootloader": "rw"
+      }
+    },
+    {
+      "name": "DOOM",
+      "id": 2,
+      "start": "2688K",
+      "size": "2560K",
+      "families": ["absolute"],
+      "permissions": {
+        "secure": "rw",
+        "nonsecure": "rw",
+        "bootloader": "rw"
+      }
+    },
+    {
+      "name": "MPY",
+      "id": 3,
+      "start": "5248K",
+      "size": "2048K",
+      "families": ["absolute"],
+      "permissions": {
+        "secure": "rw",
+        "nonsecure": "rw",
+        "bootloader": "rw"
+      }
+    }
+  ]
+}
