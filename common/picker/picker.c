@@ -1131,14 +1131,17 @@ int thumbyone_picker_run(void) {
     nes_lcd_backlight(1);
     buttons_init();
 
+    /* Brightness + LED: the shared settings mirror is flash-sector-
+     * backed (no FatFs dependency), so load and apply before the FAT
+     * mount — that way the LCD + LED reach the user's saved level as
+     * early as possible, minimising the white flash window left by
+     * chain_image's reset of the PWM state. drive_backlight=true
+     * because the picker owns GP7 here; the engine's PIO PWM takes
+     * over later on its own init path. */
+    thumbyone_slot_init_brightness_and_led(true);
+
     FATFS g_fs;
     FRESULT r = thumbyone_fs_mount(&g_fs);
-    if (r == FR_OK) {
-        /* Apply the ThumbyOne system-wide brightness — same
-         * /.brightness the lobby + NES + P8 pick up. Has to happen
-         * after the FAT mount; the LCD driver came up at full. */
-        thumbyone_backlight_set(thumbyone_settings_load_brightness());
-    }
     if (r != FR_OK) {
         render_error("mount failed", "go to lobby, wipe");
         while (1) {

@@ -15,6 +15,7 @@
 #include "hardware/pwm.h"
 
 #include "thumbyone_backlight.h"
+#include "thumbyone_settings.h"
 
 #define PIN_LED_G   10   /* PWM5 A */
 #define PIN_LED_R   11   /* PWM5 B */
@@ -102,4 +103,23 @@ void thumbyone_led_off(void) {
 void thumbyone_led_refresh(void) {
     if (!s_have_last) return;
     thumbyone_led_set_rgb(s_last_r, s_last_g, s_last_b);
+}
+
+void thumbyone_slot_init_brightness_and_led(bool drive_backlight) {
+    uint8_t bri = thumbyone_settings_load_brightness();
+    if (drive_backlight) {
+        /* Slot owns GP7 directly (NES, P8, DOOM). backlight_set
+         * configures the PWM slice and drives the duty cycle. */
+        thumbyone_backlight_set(bri);
+    } else {
+        /* Another driver owns GP7 (MPY slot — engine's PIO PWM
+         * program on the same pin). Just keep backlight_get() in
+         * sync so the LED scaling math reads the right slider
+         * value without us double-driving the pin. */
+        thumbyone_backlight_track(bri);
+    }
+    thumbyone_led_init();
+    thumbyone_led_set_rgb(THUMBYONE_LED_IDLE_R,
+                          THUMBYONE_LED_IDLE_G,
+                          THUMBYONE_LED_IDLE_B);
 }

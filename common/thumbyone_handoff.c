@@ -278,8 +278,20 @@ void thumbyone_handoff_request_lobby(void) {
 
 /* ---- Chain helper — the pre-init fast path ------------------------- */
 
+#include "thumbyone_led.h"
+
 static void chain_to_partition(uint8_t *workarea, uint32_t workarea_size,
                                 int partition_id) {
+    /* Turn the front RGB LED fully off before chaining. rom_chain_image
+     * does a partial reset on the way into the new image; empirically
+     * the PWM slices on GPIO 10/11/12 end up in a default state that
+     * drives all three channels low → common-anode LED goes bright
+     * white until the slot's own init runs. Explicitly driving the
+     * LED off here collapses that window to nothing — the slot picks
+     * up with LEDs dark and paints idle-green via
+     * thumbyone_slot_init_brightness_and_led as soon as it boots. */
+    thumbyone_led_off();
+
     /* Load PT into bootrom state. */
     int rc = rom_load_partition_table(workarea, workarea_size, false);
     if (rc != 0) goto fail;

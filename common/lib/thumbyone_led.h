@@ -20,6 +20,7 @@
 #define THUMBYONE_LED_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -49,6 +50,34 @@ void thumbyone_led_off(void);
  * set. If no colour has been set yet (LED never driven by this
  * module in the current slot) the call is a no-op. */
 void thumbyone_led_refresh(void);
+
+/* Shared "idle / in picker" LED colour. Every slot's boot path uses
+ * the same triple so switching between slots doesn't produce a
+ * visible colour step — just brightness scales with the slider. */
+#define THUMBYONE_LED_IDLE_R  0
+#define THUMBYONE_LED_IDLE_G  255
+#define THUMBYONE_LED_IDLE_B  0
+
+/* One-shot slot init:
+ *   1. Reads /.brightness from the cross-slot settings mirror
+ *      (works without FatFs, so DOOM can use this too).
+ *   2. Applies the value to the shared backlight — via
+ *      thumbyone_backlight_set() when drive_backlight == true
+ *      (NES / P8 / DOOM own GP7) or thumbyone_backlight_track()
+ *      when drive_backlight == false (MPY slot — the engine's
+ *      PIO PWM program owns GP7, so we only prime the tracked
+ *      value for LED readers).
+ *   3. Inits the LED pins and paints them idle green at that
+ *      brightness via thumbyone_led_set_rgb.
+ *
+ * Call once per slot as early in main() as possible — this is the
+ * one entry point every slot should use so the "load honours the
+ * saved brightness" contract holds everywhere without per-slot
+ * open-coding of the steps.
+ *
+ * Safe to call multiple times (idempotent); subsequent calls just
+ * re-read the mirror and re-paint. */
+void thumbyone_slot_init_brightness_and_led(bool drive_backlight);
 
 #ifdef __cplusplus
 }
