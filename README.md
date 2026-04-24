@@ -49,6 +49,38 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
 
 ---
 
+## What's new in 1.07
+
+- **MD pad B stuck on second cart load — fixed.** Launching a
+  second MD cart inside the same slot session left pad B reading
+  as held from the first frame — Cannon Fodder firing constantly,
+  Sonic ignoring the first jump press, any cart that polls B
+  affected. First launch was fine; only subsequent launches broke.
+  See the [ThumbyNES v1.07 changelog](https://github.com/austinio7116/ThumbyNES#v107--defrag-overhaul-md-b-stuck-fix-300-mhz-removed)
+  for the technical write-up.
+
+- **300 MHz overclock removed.** The 300 MHz option in the picker's
+  Overclock row and the per-cart Overclock in each in-game menu has
+  been dropped — it could cause hard-to-recover crashes, because a
+  crash on next launch with 300 MHz saved meant needing USB-MSC to
+  delete the config file before the device would boot a cart again.
+  Saved configs still set to 300 MHz now fall back to 250 MHz
+  silently on load; no user action needed. Max overclock is 250 MHz.
+
+- **Defragmenter overhaul.** The NES-slot defragmenter is more
+  reliable on near-full volumes:
+    - New `<PACK>` mode past K=500 on the preview slider —
+      guaranteed layout, always reaches `frag: 0` if the volume
+      physically has room, at the cost of more writes.
+    - Automatic reclaim of leaked FAT entries left behind by dirty
+      USB disconnects — built-in `chkdsk`-style pass that recovers
+      the lost space, shown as `rclm:N` in green on the preview.
+    - Honest "after" numbers — the free-space-after figure no
+      longer claims contiguous space that wouldn't actually exist
+      post-defrag.
+    - Bigger, red-free cluster-map palette so the pinned-cluster
+      indicator (red) never blends into a file colour.
+
 ## What's new in 1.06
 
 - **Mega Drive / Genesis compatibility jump** — every cart in our
@@ -175,9 +207,10 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
 - **New 300 MHz overclock option** in the NES-slot menus — both
   the global Overclock row in the picker menu and the per-cart
   Overclock in each in-game menu. Default stays at 250 MHz; 300
-  MHz is there for dense carts that want extra headroom - but may
-  not work on all hardware - use at your own risk - if it fails
-  you may have to delete the config files to revert it.
+  MHz is there for dense carts that want extra headroom — but may
+  not work on all hardware. Use at your own risk; if it fails you
+  may have to delete the config files to revert it.
+  _(Removed in 1.07 — see changelog.)_
 
 ## What's new in 1.03
 
@@ -756,7 +789,7 @@ Every slot has a 520 KB SRAM budget and a ~250 MHz default clock (higher on over
 **Performance & compatibility:**
 
 - **Multi-core dispatcher** (`nes_device_main.c`) switches between Nofrendo / smsplus / Peanut-GB / PicoDrive based on file extension; only one core is linked into the hot path per cart.
-- **Per-cart clock override** — global + per-ROM selection of 125 / 150 / 200 / 250 / 300 MHz; dispatcher re-runs `nes_lcd_init` + `nes_audio_pwm_init` on every launch so SPI dividers and audio IRQ rate follow the new clock correctly.
+- **Per-cart clock override** — global + per-ROM selection of 125 / 150 / 200 / 250 MHz; dispatcher re-runs `nes_lcd_init` + `nes_audio_pwm_init` on every launch so SPI dividers and audio IRQ rate follow the new clock correctly.
 - **Hot loops in SRAM** — `IRAM_ATTR` / `.time_critical.*` placement on the CPU+PPU inner loops so XIP cache misses never hit the frame budget. v1.01 also moved the smsplus Z80 core out of flash into RAM for a large SMS/GG speedup.
 - **MD dynamic IRAM** — PicoDrive's `Cz80_Exec` (17 KB hot Z80 dispatch loop) lives in a custom flash section (`.md_iram_pool`) and gets `memcpy`'d into a heap-allocated SRAM buffer at `mdc_init`, with a `--wrap=Cz80_Exec` linker thunk that indirects callers through a function pointer. Zero BSS cost across sibling cores — the 17 KB only occupies heap while MD is the active emulator. +2-3 ms/frame reclaimed vs flash execution.
 - **MD adaptive VDP skip-render** — when the last frame's emulation time overran the refresh budget, the next frame sets `PicoIn.skipFrame=1`, letting 68K + Z80 + audio emulate normally while the VDP line composite + `FinalizeLine` bail early. Caps at 2 consecutive skips. Saves ~6-8 ms on skipped frames; locks 50 PAL on heavy action scenes that would otherwise miss frames.
