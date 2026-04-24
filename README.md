@@ -381,6 +381,12 @@ A five-in-one retro emulator running Nofrendo for NES, smsplus for Master System
   <img src="docs/screenshots/nes-gb.jpg" width="240" alt="Super Mario Land on Game Boy">
 </p>
 
+<p align="center">
+  <img src="docs/screenshots/md-picker.jpg" width="240" alt="Mega Drive ROMs in the picker">
+  <img src="docs/screenshots/md-title-sonic.jpg" width="240" alt="Sonic 1 on Mega Drive">
+  <img src="docs/screenshots/md-cannon-fodder.jpg" width="240" alt="Cannon Fodder on Mega Drive (newly playable in 1.06)">
+</p>
+
 **Features:**
 
 - Per-ROM save states, per-ROM settings, favorites
