@@ -751,7 +751,7 @@ static void draw_thin_bar(int x, int y, int w, int h,
 }
 
 #ifndef THUMBYONE_FW_VERSION
-#define THUMBYONE_FW_VERSION "1.05"
+#define THUMBYONE_FW_VERSION "1.06"
 #endif
 
 static void render_lobby_menu(int cursor) {

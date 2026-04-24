@@ -49,6 +49,32 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
 
 ---
 
+## What's new in 1.06
+
+- **Mega Drive / Genesis compatibility jump** — every cart in our
+  41-ROM test set now boots and renders, up from 27/41 in 1.05.
+  Roughly one in three previously-broken carts now play. Headline
+  beneficiaries: Xenon 2, Castle of Illusion, FIFA / FIFA 98,
+  Cannon Fodder, Gunstar Heroes, Brian Lara Cricket 96, Theme Park
+  (was a hard crash), Rock n' Roll Racing, Sonic & Knuckles,
+  Street Fighter II SCE, Thunder Force IV. See the
+  [ThumbyNES v1.06 changelog](https://github.com/austinio7116/ThumbyNES#v106--mega-drive-compat--pan-chord)
+  for the technical write-up.
+
+- **MD save / load state — fixed.** Save state in the in-game menu
+  used to silently hang on most carts; now works reliably across
+  the library. Note that MD save states are larger than the other
+  systems — see [Storage budgets](#storage-budgets--leave-headroom)
+  below.
+
+- **Play-while-cropped pan chord (CROP + FILL).** Hold **LB** + a
+  d-pad direction to pan the source viewport without losing game
+  control. CROP gets full XY pan; FILL gains left/right pan within
+  the centre crop. LB → MD START now fires on release (a tap still
+  acts as START) so the chord never accidentally pauses the game.
+  Replaces the always-on CROP pan from 1.05, which permanently
+  stole the d-pad from cart input.
+
 ## What's new in 1.05
 
 > ### ⚠️ Upgrading from 1.04 or earlier — back up first
@@ -535,6 +561,26 @@ ThumbyOne enumerates as a different USB product ID to avoid driver-letter collis
 
 **Everything's broken after a bad transfer.**
 Hold **LB + RB** at boot, hold them through the countdown — fresh FAT, pristine device.
+
+### Storage budgets — leave headroom
+
+The shared FAT is **8.6 MB in the default MD-enabled build** (9.6 MB with `THUMBYONE_WITH_MD=OFF`). ROMs are the bulk of it; save states and battery saves are small individually but add up across a library, and MD's are by far the biggest:
+
+| File | Typical size |
+|---|---|
+| **MD save state** (`.sta`) | **130–200 KB per slot** (full 68K + Z80 + VRAM + CRAM + YM2612 + WRAM snapshot) |
+| MD battery save (`.srm`) | 8–32 KB depending on cart |
+| NES / SMS save state | 15–25 KB |
+| GB / GBC save state | 17–25 KB |
+| GB / GBC battery save | 8–32 KB |
+
+**Aim to keep at least ~500 KB free** at any time — enough headroom for an MD state save plus the FAT defragmenter's working room. Save state writes fail silently if the disk is full (the OSD reports "save fail" with no further detail). The lobby MENU overlay's `Disk` row shows live used / total — check it after big USB transfers.
+
+If you fill up, the easiest fixes are: drop a couple of the largest ROMs over USB, or delete old save states (they live alongside their ROM in `/roms/`, with the same basename but `.sta` extension).
+
+### "load err -35" on the red splash
+
+Most fragmented carts fall back to the chained-XIP path ([added in 1.03](#whats-new-in-103)) and load cleanly, but extreme fragmentation combined with low free space can still produce a `load err -35` on the cart-launch splash — the cluster chain runs longer than the loader's pointer table can hold. Run **Defragment now** from the ThumbyNES picker menu (see [FAT defragmenter](#fat-defragmenter) below); a clean volume guarantees the cart loads via the contiguous mmap path.
 
 ### FAT defragmenter
 
