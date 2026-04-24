@@ -95,7 +95,7 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
   into the ThumbyNES slot. Drop `.md` / `.gen` / `.bin` into `/roms/`;
   the picker gets a new **MD** tab. Boots and plays most 1990-era
   3-button carts (Sonic 2, Streets of Rage 2, many more) locked at
-  50 FPS PAL with full audio at the 300 MHz overclock. See the
+  50 FPS PAL with full audio at the 250 MHz overclock. See the
   ThumbyNES repo's [Changelog v1.05](https://github.com/austinio7116/ThumbyNES#v105--mega-drive--genesis)
   for the emulator-level details (IRAM tricks, adaptive VDP skip,
   runtime audio modes, etc.) and [`vendor/VENDORING.md`](https://github.com/austinio7116/ThumbyNES/blob/main/vendor/VENDORING.md)
@@ -175,7 +175,9 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
 - **New 300 MHz overclock option** in the NES-slot menus — both
   the global Overclock row in the picker menu and the per-cart
   Overclock in each in-game menu. Default stays at 250 MHz; 300
-  MHz is there for dense carts that want extra headroom.
+  MHz is there for dense carts that want extra headroom - but may
+  not work on all hardware - use at your own risk - if it fails
+  you may have to delete the config files to revert it.
 
 ## What's new in 1.03
 
