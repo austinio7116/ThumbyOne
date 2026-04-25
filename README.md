@@ -312,7 +312,7 @@ To transfer more files later: from inside any running system, **hold MENU** → 
 
 ### 3. Returning to stock
 
-The official TinyCircuits stock firmware UF2 cannot be drag-flashed directly onto a ThumbyOne BOOTSEL drive — see [Returning to stock](#returning-to-stock) under Tips and troubleshooting for the why and the two recovery procedures (drag-and-drop revert UF2 / picotool).
+Want to go back to TinyCircuits stock firmware later? You can — see [Returning to stock](#returning-to-stock) under Tips and troubleshooting. It's a single drag-and-drop with the bundled `firmware_thumbyone_revert.uf2`, after which the device is back to factory state and behaves like any other stock Thumby Color.
 
 ---
 
