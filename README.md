@@ -29,6 +29,7 @@ No per-system re-flashing.
   - [ThumbyP8](#thumbyp8--pico-8)
   - [ThumbyDOOM](#thumbydoom--shareware-doom)
   - [MicroPython + Tiny Game Engine](#micropython--tiny-game-engine)
+- [Changelog](#changelog)
 - [Tips and troubleshooting](#tips-and-troubleshooting)
 - [Technical specifications](#technical-specifications)
 
@@ -46,207 +47,6 @@ No per-system re-flashing.
 All four systems share one FAT drive, visible over USB when you're in the lobby. Size depends on the build: **8.6 MB in the default (MD-enabled) layout**, 9.6 MB in the backward-compat `THUMBYONE_WITH_MD=OFF` build.
 
 **Everything is optional.** If you never want MD, rebuild with `-DTHUMBYONE_WITH_MD=OFF` and reclaim 1 MB for the FAT. If you never want DOOM, drop it from the build for 2.5 MB. Python-only builds turn the three emulators off entirely. See the [build matrix](#build-matrix).
-
----
-
-## What's new in 1.07
-
-- **MD pad B stuck on second cart load — fixed.** Launching a
-  second MD cart inside the same slot session left pad B reading
-  as held from the first frame — Cannon Fodder firing constantly,
-  Sonic ignoring the first jump press, any cart that polls B
-  affected. First launch was fine; only subsequent launches broke.
-  See the [ThumbyNES v1.07 changelog](https://github.com/austinio7116/ThumbyNES#v107--defrag-overhaul-md-b-stuck-fix-300-mhz-removed)
-  for the technical write-up.
-
-- **300 MHz overclock removed.** The 300 MHz option in the picker's
-  Overclock row and the per-cart Overclock in each in-game menu has
-  been dropped — it could cause hard-to-recover crashes, because a
-  crash on next launch with 300 MHz saved meant needing USB-MSC to
-  delete the config file before the device would boot a cart again.
-  Saved configs still set to 300 MHz now fall back to 250 MHz
-  silently on load; no user action needed. Max overclock is 250 MHz.
-
-- **Defragmenter overhaul.** The NES-slot defragmenter is more
-  reliable on near-full volumes:
-    - New `<PACK>` mode past K=500 on the preview slider —
-      guaranteed layout, always reaches `frag: 0` if the volume
-      physically has room, at the cost of more writes.
-    - Automatic reclaim of leaked FAT entries left behind by dirty
-      USB disconnects — built-in `chkdsk`-style pass that recovers
-      the lost space, shown as `rclm:N` in green on the preview.
-    - Honest "after" numbers — the free-space-after figure no
-      longer claims contiguous space that wouldn't actually exist
-      post-defrag.
-    - Bigger, red-free cluster-map palette so the pinned-cluster
-      indicator (red) never blends into a file colour.
-
-## What's new in 1.06
-
-- **Mega Drive / Genesis compatibility jump** — every cart in our
-  41-ROM test set now boots and renders, up from 27/41 in 1.05.
-  Roughly one in three previously-broken carts now play. Headline
-  beneficiaries: Xenon 2, Castle of Illusion, FIFA / FIFA 98,
-  Cannon Fodder, Gunstar Heroes, Brian Lara Cricket 96, Theme Park
-  (was a hard crash), Rock n' Roll Racing, Sonic & Knuckles,
-  Street Fighter II SCE, Thunder Force IV. See the
-  [ThumbyNES v1.06 changelog](https://github.com/austinio7116/ThumbyNES#v106--mega-drive-compat--pan-chord)
-  for the technical write-up.
-
-- **MD save / load state — fixed.** Save state in the in-game menu
-  used to silently hang on most carts; now works reliably across
-  the library. Note that MD save states are larger than the other
-  systems — see [Storage budgets](#storage-budgets--leave-headroom)
-  below.
-
-- **Play-while-cropped pan chord (CROP + FILL).** Hold **LB** + a
-  d-pad direction to pan the source viewport without losing game
-  control. CROP gets full XY pan; FILL gains left/right pan within
-  the centre crop. LB → MD START now fires on release (a tap still
-  acts as START) so the chord never accidentally pauses the game.
-  Replaces the always-on CROP pan from 1.05, which permanently
-  stole the d-pad from cart input.
-
-## What's new in 1.05
-
-> ### ⚠️ Upgrading from 1.04 or earlier — back up first
->
-> The 1.05 default build shifts every partition up by 1 MB to make room for the enlarged Mega Drive / Genesis ROM / tables area in the NES slot. The shared FAT therefore moves from `0x660000` (9.6 MB) to `0x760000` (**8.6 MB**) — a different on-disk location AND 1 MB smaller. When you flash 1.05 the lobby sees no valid FAT header at the new offset and **auto-formats** a fresh volume on first boot. **Everything on your ThumbyOne USB drive is wiped.**
->
-> Back up first, every time:
-> 1. Boot into the 1.04 lobby (or any slot, then back to lobby).
-> 2. Plug in USB — the device enumerates as `ThumbyOne Storage`.
-> 3. Copy everything off — `/roms/`, `/carts/`, `/games/`, `/Saves/`, `/.favs`, `/.active_game`, and the hidden `/.volume` / `/.brightness` settings if you care about those.
-> 4. Eject, unplug, flash 1.05, plug back in.
-> 5. Copy as much back as fits in **8.6 MB**. If you were near-full on 1.04 you'll need to trim something — typically the largest ROMs or a couple of MicroPython games with big assets. The per-slot picker's `Disk` row in the settings menu tells you exactly how full the new FAT is after each write.
->
-> If you don't need Mega Drive / Genesis support at all, you can skip the migration hassle by building / flashing with `-DTHUMBYONE_WITH_MD=OFF` instead (see the [Build matrix](#build-matrix)). That keeps the original layout (9.6 MB FAT at `0x660000`) and the FAT you already had on 1.04 will mount untouched — no format, no data loss. You just don't get MD.
-
-- **Sega Mega Drive / Genesis support** via vendored
-  [PicoDrive](https://github.com/notaz/picodrive) (LGPLv2), integrated
-  into the ThumbyNES slot. Drop `.md` / `.gen` / `.bin` into `/roms/`;
-  the picker gets a new **MD** tab. Boots and plays most 1990-era
-  3-button carts (Sonic 2, Streets of Rage 2, many more) locked at
-  50 FPS PAL with full audio at the 250 MHz overclock. See the
-  ThumbyNES repo's [Changelog v1.05](https://github.com/austinio7116/ThumbyNES#v105--mega-drive--genesis)
-  for the emulator-level details (IRAM tricks, adaptive VDP skip,
-  runtime audio modes, etc.) and [`vendor/VENDORING.md`](https://github.com/austinio7116/ThumbyNES/blob/main/vendor/VENDORING.md)
-  for the 18 individual PicoDrive patches that got it running on
-  Cortex-M33 + XIP flash.
-
-- **New `THUMBYONE_WITH_MD` build option** (default `ON`). PicoDrive's
-  ~850 KB of precomputed flash tables (FAME 68K jumptable 256 KB,
-  YM2612 log-sine + LFO 208 + 128 KB, cz80 SZHVC 256 KB) don't fit
-  in the original 1 MB NES partition, so the default build grows
-  that partition to 2 MB and shifts every downstream partition +
-  the shared FAT up by 1 MB (FAT goes from 9.6 MB to 8.6 MB of
-  ROM storage). Users who want the old layout + no MD can rebuild
-  with `-DTHUMBYONE_WITH_MD=OFF`; ThumbyNES drops to 643 KB, the
-  NES partition stays 1 MB, and the FAT keeps its 9.6 MB.
-
-- **DOOM overlay menu trigger changed** from the LB + RB chord to a
-  MENU long-press, matching the in-game menu gesture used everywhere
-  else. MENU-tap still opens the vanilla DOOM Main Menu (Save /
-  Load / Options / Quit). The cross-slot handoff from DOOM's
-  overlay menu to the lobby is now wired up — no need to route
-  through Main Menu → Quit Game any more.
-
-- **DOOM front-LED health indicator.** The device's front RGB LED
-  now smoothly tracks player HP during gameplay — pure green at
-  100, yellow around 50, pure red at 0. Handy for peripheral-vision
-  awareness while your eyes are locked on the tiny screen. Hidden
-  on the title screen / demo playback (LED stays at boot idle
-  green). The blend is gamma-balanced against the Thumby's LED dies
-  — raw `(R=255, G=255)` reads almost-red because the green die is
-  dimmer than red at equal duty, so the "yellow" midpoint caps red
-  at ~96 to get a visually-balanced yellow. Zero perceptible cost —
-  new PWM writes only fire when HP actually changes.
-
-- **Consistent front-LED behaviour across every slot.** The LED now
-  reads `/.brightness` on every slot entry (DOOM too — previously it
-  flashed white at full brightness on load), stays dark during the
-  chain_image handoff between slots (no white flash between tiles),
-  and tracks the brightness slider live as you drag it in every
-  picker and in-game menu. New shared `thumbyone_slot_init_brightness_and_led()`
-  helper + live `on_change` callback plumbed through the menu slider
-  rows — every slot now drives the LED through the same code path
-  with the same PWM policy.
-
-- **Battery module raw-ADC diagnostics** exposed via a new accessor
-  so the picker / in-game overlays can show counts for debugging,
-  and the half-voltage logic got refreshed for more accurate
-  reporting near the low-battery cutoff.
-
-- **NES defragmenter planner refresh** — the cluster-level defragmenter
-  introduced in v1.03 got a planner rewrite for faster compaction and
-  a cleaner preview on near-full volumes. See the NES slot's picker
-  menu → **Defragment now**.
-
-## What's new in 1.04
-
-- **Game Boy Color and Game Gear look better.** The asymmetric
-  5:4 × 9:8 scaling the 160×144 screens need to fill the Thumby's
-  128×128 display used to drop every 5th source column and every
-  9th row with a pure nearest-neighbour blit — thin text strokes
-  disappeared in menus, HUDs and dialogue boxes. FIT now runs a
-  coverage-weighted blend that preserves every source pixel
-  proportional to its footprint, making text clean and legible.
-  A new **BLEND toggle** in each cart's in-game menu (default on
-  for GB / GBC / GG) lets you flip back to pure nearest on carts
-  where you specifically want the old sharp look.
-- **Palette-aware DMG blend.** On original Game Boy carts the
-  blend runs in palette-index space and interpolates between
-  neighbouring palette entries, so the classic Nintendo green (and
-  every other DMG palette) stays on its own gradient instead of
-  picking up the teal hue shift a naive RGB blend would introduce
-  between the lighter and darker greens.
-- **Packed-RGB565 lerp** for the fast blend path. One 32-bit
-  multiply per pixel lerp handles all three channels in parallel;
-  the full 128×128 blend costs well under a millisecond per frame
-  at 250 MHz.
-- **New 300 MHz overclock option** in the NES-slot menus — both
-  the global Overclock row in the picker menu and the per-cart
-  Overclock in each in-game menu. Default stays at 250 MHz; 300
-  MHz is there for dense carts that want extra headroom — but may
-  not work on all hardware. Use at your own risk; if it fails you
-  may have to delete the config files to revert it.
-  _(Removed in 1.07 — see changelog.)_
-
-## What's new in 1.03
-
-- **MicroPython games exit cleanly back to the picker.** If a game calls `sys.exit()`, `engine.end()`, raises an uncaught exception, or simply returns from `main.py`, the slot now reboots straight back into the MicroPython game picker instead of hanging on a dead REPL. Previously the device appeared frozen until you power-cycled it.
-- **Game Boy Color support** on the ThumbyNES slot. Drop `.gbc` carts alongside your `.gb` files — the emulator now runs them with their full CGB palette (converted to RGB565 per line). Powered by a swap to fhoedemakers' CGB-capable peanut_gb fork; DMG carts still work unchanged with the six built-in shade palettes.
-- **Chained-XIP for fragmented ROMs.** Fragmented cartridges used to refuse to load (`load err -35` on the red splash). They now fall back to a per-cluster XIP pointer table and still run at full 60 fps — no RAM copy, no defrag required. Drop a ROM, play it, defragment whenever (or never).
-- **Brand-new cluster-level defragmenter** for the shared FAT. The old file-level rewrite couldn't handle near-full volumes; the new one cycle-sorts clusters directly and works down to tiny free margins. Features a preview-and-confirm screen (A = apply, B = cancel) with before/after cluster maps so you can see what it'll do before it touches anything, live per-file cluster-map animation during the move, and a red "DO NOT POWER OFF" banner with matching front-LED indicator while the FAT is mid-write. Triggered from the ThumbyNES picker menu's "Defragment now"; running it is optional because chained-XIP handles fragmentation transparently, but compacting the free space lets you drop large new ROMs that otherwise wouldn't fit in one contiguous run.
-
-## What's new in 1.02
-
-System-wide controls, consistent across every menu:
-
-- **Global volume and brightness.** The lobby MENU overlay gets two new sliders — `VOLUME` and `BRIGHTNESS`. Set them once, they apply to every slot on launch: NES, SMS, GG, Game Boy, PICO-8, DOOM and every MicroPython game pick up the same values. Change volume inside any slot's menu and the lobby shows the new value next time you back out.
-- **Brightness sliders in every slot menu.** ThumbyNES picker + in-game pause, ThumbyP8 picker + in-game pause, and the MicroPython picker all have a live brightness slider now — the backlight PWM tracks while you slide.
-- **DOOM honours the system volume and brightness** too. On launch DOOM picks up whatever the lobby was set to; its own pause menu still works as a session-level override.
-- **Consistent widgets**: thick right-aligned outlined slider across the lobby + every slot menu, press-and-hold autorepeat with identical timing everywhere (300 ms warm-up, 60 ms cadence), and every slider takes ~20 clicks end-to-end regardless of its internal range. Full-row highlighted cursor band in the lobby (used to be a hairline).
-- **"Back to lobby" and "Quit to picker" are always the LAST menu item.** Press UP once from the top of any menu to wrap straight to back-out — the muscle-memory shortcut.
-
-Cleanups:
-
-- **No more "checking files" / "DEFRAGMENTING" flashes** on every NES launch. The auto-defrag was unreliable and fired unnecessarily; it's gone.
-- **Lobby MENU tidied**. The old "Reboot lobby" action is gone (it was occasionally landing in a random slot) — close the menu via B / MENU / A-on-Close.
-- **NES picker menu tidied**. Dead "Defragment now" action removed.
-- **Minimum brightness lowered** (FLOOR 25 → 5, about 2 % duty). Room to dim the screen further for dark-room play without letting a slider set 0 = invisible.
-- **Consistent disk display**. Every menu with a disk row reads "`X.XM / Y.YM`" used / total with the bar filling with used; previously the direction and formatting varied slot-to-slot.
-- **Consistent battery readout**. One shared sampler (16-sample trimmed mean + EMA + ±2 % percent hysteresis) — the number stays put, stops flickering, and reads the same on every screen that shows it.
-
-Under-the-hood fixes that you might notice:
-
-- **DOOM no longer slows down** after saving a game or opening the LB+RB overlay menu — a flash-write bug that left the chip in slow-XIP mode has been fixed.
-- **NES + P8 brightness actually applies.** Those slots share a PWM slice with their audio output, so the old hardware-PWM backlight was overwritten on every audio sample. The shared backlight driver now uses PIO PWM on a dedicated state machine; audio can't touch it.
-- **MicroPython: no bright-frame flash** between menu redraws in the picker.
-
-Storage format: system settings (volume + brightness) live in a single 4 KB flash sector — readable by every slot including DOOM, written only when you move a slider and close the menu.
-
-See the [MENU overlay](#the-lobby) and per-slot menus for the slider rows; the [technical notes](#per-slot-architecture) explain the flash layout for curious readers.
 
 ---
 
@@ -583,6 +383,209 @@ MicroPython with the Tiny Game Engine C module baked in, running a custom C pick
 ```
 
 The icon + description are optional (picker falls back to the directory name and a placeholder tile), but having them makes your game look at home next to everything else on the picker.
+
+---
+
+## Changelog
+
+### 1.07
+
+- **MD pad B stuck on second cart load — fixed.** Launching a
+  second MD cart inside the same slot session left pad B reading
+  as held from the first frame — Cannon Fodder firing constantly,
+  Sonic ignoring the first jump press, any cart that polls B
+  affected. First launch was fine; only subsequent launches broke.
+  See the [ThumbyNES v1.07 changelog](https://github.com/austinio7116/ThumbyNES#v107--defrag-overhaul-md-b-stuck-fix-300-mhz-removed)
+  for the technical write-up.
+
+- **300 MHz overclock removed.** The 300 MHz option in the picker's
+  Overclock row and the per-cart Overclock in each in-game menu has
+  been dropped — it could cause hard-to-recover crashes, because a
+  crash on next launch with 300 MHz saved meant needing USB-MSC to
+  delete the config file before the device would boot a cart again.
+  Saved configs still set to 300 MHz now fall back to 250 MHz
+  silently on load; no user action needed. Max overclock is 250 MHz.
+
+- **Defragmenter overhaul.** The NES-slot defragmenter is more
+  reliable on near-full volumes:
+    - New `<PACK>` mode past K=500 on the preview slider —
+      guaranteed layout, always reaches `frag: 0` if the volume
+      physically has room, at the cost of more writes.
+    - Automatic reclaim of leaked FAT entries left behind by dirty
+      USB disconnects — built-in `chkdsk`-style pass that recovers
+      the lost space, shown as `rclm:N` in green on the preview.
+    - Honest "after" numbers — the free-space-after figure no
+      longer claims contiguous space that wouldn't actually exist
+      post-defrag.
+    - Bigger, red-free cluster-map palette so the pinned-cluster
+      indicator (red) never blends into a file colour.
+
+### 1.06
+
+- **Mega Drive / Genesis compatibility jump** — every cart in our
+  41-ROM test set now boots and renders, up from 27/41 in 1.05.
+  Roughly one in three previously-broken carts now play. Headline
+  beneficiaries: Xenon 2, Castle of Illusion, FIFA / FIFA 98,
+  Cannon Fodder, Gunstar Heroes, Brian Lara Cricket 96, Theme Park
+  (was a hard crash), Rock n' Roll Racing, Sonic & Knuckles,
+  Street Fighter II SCE, Thunder Force IV. See the
+  [ThumbyNES v1.06 changelog](https://github.com/austinio7116/ThumbyNES#v106--mega-drive-compat--pan-chord)
+  for the technical write-up.
+
+- **MD save / load state — fixed.** Save state in the in-game menu
+  used to silently hang on most carts; now works reliably across
+  the library. Note that MD save states are larger than the other
+  systems — see [Storage budgets](#storage-budgets--leave-headroom)
+  below.
+
+- **Play-while-cropped pan chord (CROP + FILL).** Hold **LB** + a
+  d-pad direction to pan the source viewport without losing game
+  control. CROP gets full XY pan; FILL gains left/right pan within
+  the centre crop. LB → MD START now fires on release (a tap still
+  acts as START) so the chord never accidentally pauses the game.
+  Replaces the always-on CROP pan from 1.05, which permanently
+  stole the d-pad from cart input.
+
+### 1.05
+
+> ### ⚠️ Upgrading from 1.04 or earlier — back up first
+>
+> The 1.05 default build shifts every partition up by 1 MB to make room for the enlarged Mega Drive / Genesis ROM / tables area in the NES slot. The shared FAT therefore moves from `0x660000` (9.6 MB) to `0x760000` (**8.6 MB**) — a different on-disk location AND 1 MB smaller. When you flash 1.05 the lobby sees no valid FAT header at the new offset and **auto-formats** a fresh volume on first boot. **Everything on your ThumbyOne USB drive is wiped.**
+>
+> Back up first, every time:
+> 1. Boot into the 1.04 lobby (or any slot, then back to lobby).
+> 2. Plug in USB — the device enumerates as `ThumbyOne Storage`.
+> 3. Copy everything off — `/roms/`, `/carts/`, `/games/`, `/Saves/`, `/.favs`, `/.active_game`, and the hidden `/.volume` / `/.brightness` settings if you care about those.
+> 4. Eject, unplug, flash 1.05, plug back in.
+> 5. Copy as much back as fits in **8.6 MB**. If you were near-full on 1.04 you'll need to trim something — typically the largest ROMs or a couple of MicroPython games with big assets. The per-slot picker's `Disk` row in the settings menu tells you exactly how full the new FAT is after each write.
+>
+> If you don't need Mega Drive / Genesis support at all, you can skip the migration hassle by building / flashing with `-DTHUMBYONE_WITH_MD=OFF` instead (see the [Build matrix](#build-matrix)). That keeps the original layout (9.6 MB FAT at `0x660000`) and the FAT you already had on 1.04 will mount untouched — no format, no data loss. You just don't get MD.
+
+- **Sega Mega Drive / Genesis support** via vendored
+  [PicoDrive](https://github.com/notaz/picodrive) (LGPLv2), integrated
+  into the ThumbyNES slot. Drop `.md` / `.gen` / `.bin` into `/roms/`;
+  the picker gets a new **MD** tab. Boots and plays most 1990-era
+  3-button carts (Sonic 2, Streets of Rage 2, many more) locked at
+  50 FPS PAL with full audio at the 250 MHz overclock. See the
+  ThumbyNES repo's [Changelog v1.05](https://github.com/austinio7116/ThumbyNES#v105--mega-drive--genesis)
+  for the emulator-level details (IRAM tricks, adaptive VDP skip,
+  runtime audio modes, etc.) and [`vendor/VENDORING.md`](https://github.com/austinio7116/ThumbyNES/blob/main/vendor/VENDORING.md)
+  for the 18 individual PicoDrive patches that got it running on
+  Cortex-M33 + XIP flash.
+
+- **New `THUMBYONE_WITH_MD` build option** (default `ON`). PicoDrive's
+  ~850 KB of precomputed flash tables (FAME 68K jumptable 256 KB,
+  YM2612 log-sine + LFO 208 + 128 KB, cz80 SZHVC 256 KB) don't fit
+  in the original 1 MB NES partition, so the default build grows
+  that partition to 2 MB and shifts every downstream partition +
+  the shared FAT up by 1 MB (FAT goes from 9.6 MB to 8.6 MB of
+  ROM storage). Users who want the old layout + no MD can rebuild
+  with `-DTHUMBYONE_WITH_MD=OFF`; ThumbyNES drops to 643 KB, the
+  NES partition stays 1 MB, and the FAT keeps its 9.6 MB.
+
+- **DOOM overlay menu trigger changed** from the LB + RB chord to a
+  MENU long-press, matching the in-game menu gesture used everywhere
+  else. MENU-tap still opens the vanilla DOOM Main Menu (Save /
+  Load / Options / Quit). The cross-slot handoff from DOOM's
+  overlay menu to the lobby is now wired up — no need to route
+  through Main Menu → Quit Game any more.
+
+- **DOOM front-LED health indicator.** The device's front RGB LED
+  now smoothly tracks player HP during gameplay — pure green at
+  100, yellow around 50, pure red at 0. Handy for peripheral-vision
+  awareness while your eyes are locked on the tiny screen. Hidden
+  on the title screen / demo playback (LED stays at boot idle
+  green). The blend is gamma-balanced against the Thumby's LED dies
+  — raw `(R=255, G=255)` reads almost-red because the green die is
+  dimmer than red at equal duty, so the "yellow" midpoint caps red
+  at ~96 to get a visually-balanced yellow. Zero perceptible cost —
+  new PWM writes only fire when HP actually changes.
+
+- **Consistent front-LED behaviour across every slot.** The LED now
+  reads `/.brightness` on every slot entry (DOOM too — previously it
+  flashed white at full brightness on load), stays dark during the
+  chain_image handoff between slots (no white flash between tiles),
+  and tracks the brightness slider live as you drag it in every
+  picker and in-game menu. New shared `thumbyone_slot_init_brightness_and_led()`
+  helper + live `on_change` callback plumbed through the menu slider
+  rows — every slot now drives the LED through the same code path
+  with the same PWM policy.
+
+- **Battery module raw-ADC diagnostics** exposed via a new accessor
+  so the picker / in-game overlays can show counts for debugging,
+  and the half-voltage logic got refreshed for more accurate
+  reporting near the low-battery cutoff.
+
+- **NES defragmenter planner refresh** — the cluster-level defragmenter
+  introduced in v1.03 got a planner rewrite for faster compaction and
+  a cleaner preview on near-full volumes. See the NES slot's picker
+  menu → **Defragment now**.
+
+### 1.04
+
+- **Game Boy Color and Game Gear look better.** The asymmetric
+  5:4 × 9:8 scaling the 160×144 screens need to fill the Thumby's
+  128×128 display used to drop every 5th source column and every
+  9th row with a pure nearest-neighbour blit — thin text strokes
+  disappeared in menus, HUDs and dialogue boxes. FIT now runs a
+  coverage-weighted blend that preserves every source pixel
+  proportional to its footprint, making text clean and legible.
+  A new **BLEND toggle** in each cart's in-game menu (default on
+  for GB / GBC / GG) lets you flip back to pure nearest on carts
+  where you specifically want the old sharp look.
+- **Palette-aware DMG blend.** On original Game Boy carts the
+  blend runs in palette-index space and interpolates between
+  neighbouring palette entries, so the classic Nintendo green (and
+  every other DMG palette) stays on its own gradient instead of
+  picking up the teal hue shift a naive RGB blend would introduce
+  between the lighter and darker greens.
+- **Packed-RGB565 lerp** for the fast blend path. One 32-bit
+  multiply per pixel lerp handles all three channels in parallel;
+  the full 128×128 blend costs well under a millisecond per frame
+  at 250 MHz.
+- **New 300 MHz overclock option** in the NES-slot menus — both
+  the global Overclock row in the picker menu and the per-cart
+  Overclock in each in-game menu. Default stays at 250 MHz; 300
+  MHz is there for dense carts that want extra headroom — but may
+  not work on all hardware. Use at your own risk; if it fails you
+  may have to delete the config files to revert it.
+  _(Removed in 1.07 — see changelog.)_
+
+### 1.03
+
+- **MicroPython games exit cleanly back to the picker.** If a game calls `sys.exit()`, `engine.end()`, raises an uncaught exception, or simply returns from `main.py`, the slot now reboots straight back into the MicroPython game picker instead of hanging on a dead REPL. Previously the device appeared frozen until you power-cycled it.
+- **Game Boy Color support** on the ThumbyNES slot. Drop `.gbc` carts alongside your `.gb` files — the emulator now runs them with their full CGB palette (converted to RGB565 per line). Powered by a swap to fhoedemakers' CGB-capable peanut_gb fork; DMG carts still work unchanged with the six built-in shade palettes.
+- **Chained-XIP for fragmented ROMs.** Fragmented cartridges used to refuse to load (`load err -35` on the red splash). They now fall back to a per-cluster XIP pointer table and still run at full 60 fps — no RAM copy, no defrag required. Drop a ROM, play it, defragment whenever (or never).
+- **Brand-new cluster-level defragmenter** for the shared FAT. The old file-level rewrite couldn't handle near-full volumes; the new one cycle-sorts clusters directly and works down to tiny free margins. Features a preview-and-confirm screen (A = apply, B = cancel) with before/after cluster maps so you can see what it'll do before it touches anything, live per-file cluster-map animation during the move, and a red "DO NOT POWER OFF" banner with matching front-LED indicator while the FAT is mid-write. Triggered from the ThumbyNES picker menu's "Defragment now"; running it is optional because chained-XIP handles fragmentation transparently, but compacting the free space lets you drop large new ROMs that otherwise wouldn't fit in one contiguous run.
+
+### 1.02
+
+System-wide controls, consistent across every menu:
+
+- **Global volume and brightness.** The lobby MENU overlay gets two new sliders — `VOLUME` and `BRIGHTNESS`. Set them once, they apply to every slot on launch: NES, SMS, GG, Game Boy, PICO-8, DOOM and every MicroPython game pick up the same values. Change volume inside any slot's menu and the lobby shows the new value next time you back out.
+- **Brightness sliders in every slot menu.** ThumbyNES picker + in-game pause, ThumbyP8 picker + in-game pause, and the MicroPython picker all have a live brightness slider now — the backlight PWM tracks while you slide.
+- **DOOM honours the system volume and brightness** too. On launch DOOM picks up whatever the lobby was set to; its own pause menu still works as a session-level override.
+- **Consistent widgets**: thick right-aligned outlined slider across the lobby + every slot menu, press-and-hold autorepeat with identical timing everywhere (300 ms warm-up, 60 ms cadence), and every slider takes ~20 clicks end-to-end regardless of its internal range. Full-row highlighted cursor band in the lobby (used to be a hairline).
+- **"Back to lobby" and "Quit to picker" are always the LAST menu item.** Press UP once from the top of any menu to wrap straight to back-out — the muscle-memory shortcut.
+
+Cleanups:
+
+- **No more "checking files" / "DEFRAGMENTING" flashes** on every NES launch. The auto-defrag was unreliable and fired unnecessarily; it's gone.
+- **Lobby MENU tidied**. The old "Reboot lobby" action is gone (it was occasionally landing in a random slot) — close the menu via B / MENU / A-on-Close.
+- **NES picker menu tidied**. Dead "Defragment now" action removed.
+- **Minimum brightness lowered** (FLOOR 25 → 5, about 2 % duty). Room to dim the screen further for dark-room play without letting a slider set 0 = invisible.
+- **Consistent disk display**. Every menu with a disk row reads "`X.XM / Y.YM`" used / total with the bar filling with used; previously the direction and formatting varied slot-to-slot.
+- **Consistent battery readout**. One shared sampler (16-sample trimmed mean + EMA + ±2 % percent hysteresis) — the number stays put, stops flickering, and reads the same on every screen that shows it.
+
+Under-the-hood fixes that you might notice:
+
+- **DOOM no longer slows down** after saving a game or opening the LB+RB overlay menu — a flash-write bug that left the chip in slow-XIP mode has been fixed.
+- **NES + P8 brightness actually applies.** Those slots share a PWM slice with their audio output, so the old hardware-PWM backlight was overwritten on every audio sample. The shared backlight driver now uses PIO PWM on a dedicated state machine; audio can't touch it.
+- **MicroPython: no bright-frame flash** between menu redraws in the picker.
+
+Storage format: system settings (volume + brightness) live in a single 4 KB flash sector — readable by every slot including DOOM, written only when you move a slider and close the menu.
+
+See the [MENU overlay](#the-lobby) and per-slot menus for the slider rows; the [technical notes](#per-slot-architecture) explain the flash layout for curious readers.
 
 ---
 
