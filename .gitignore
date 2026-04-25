@@ -5,6 +5,7 @@ build_*/
 # the one-click-download artifacts referenced from the README.
 !firmware_thumbyone.uf2
 !firmware_thumbyone_nomd.uf2
+!firmware_thumbyone_revert.uf2
 *.elf
 *.bin
 *.map
