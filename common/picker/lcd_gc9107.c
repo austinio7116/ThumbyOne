@@ -86,6 +86,18 @@ void nes_lcd_init(void) {
     gpio_put(PIN_RST, 0); busy_wait_ms(50);
     gpio_put(PIN_RST, 1); busy_wait_ms(120);
 
+    /* Software reset — belt-and-suspenders against partial-reset states
+     * after a quick reboot where the LCD's VCC didn't fully discharge
+     * and the hardware RST pulse left chip state stale. Symptom we've
+     * seen without this: occasional 180° rotation + colour inversion
+     * after fast reboots, persisting until a longer power-off lets the
+     * panel cleanly cold-boot. SWRESET forces the chip's command
+     * parser back to "expecting command" and resets internal registers
+     * regardless of VCC condition; per datasheet, the display will not
+     * accept further commands for 120 ms after this. */
+    lcd_cmd(0x01, NULL, 0);
+    busy_wait_ms(120);
+
     /* Inter-register enable */
     lcd_cmd(0xFE, NULL, 0);
     lcd_cmd(0xEF, NULL, 0);
@@ -124,6 +136,11 @@ void nes_lcd_init(void) {
         0x2E, 0x41, 0x62, 0x56, 0xA5, 0x3A, 0x3F,
         0x60, 0x0F, 0x07, 0x0A, 0x18, 0x18, 0x1D
     }, 14);
+
+    /* INVOFF — explicit "no colour inversion" so a partial-reset chip
+     * with INVON stale from a previous boot doesn't display inverted.
+     * No parameters; the GC9107 toggles inversion off on receipt. */
+    lcd_cmd(0x20, NULL, 0);
 
     lcd_cmd(0x11, NULL, 0);   /* SLPOUT */
     busy_wait_ms(120);
