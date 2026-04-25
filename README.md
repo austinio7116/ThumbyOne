@@ -312,65 +312,7 @@ To transfer more files later: from inside any running system, **hold MENU** → 
 
 ### 3. Returning to stock
 
-> ⚠️ **The official TinyCircuits stock firmware UF2 will NOT recover a ThumbyOne-installed device** if you drag it directly onto the BOOTSEL drive.
->
-> Stock firmware ships as UF2 family `rp2350-arm-s`, which the RP2350 bootrom treats as a *movable* application image — it gets routed into one of ThumbyOne's slot partitions (which have `arm_boot 1` set), not over the lobby. The drive copy may even appear to succeed, but the device keeps booting ThumbyOne and the lobby never gets replaced. This is RP2350 bootrom behaviour, not a ThumbyOne bug — no partition-table tweak or firmware update fixes it. **Use one of the procedures below instead.**
-
-#### Option A — drag-and-drop the recovery UF2 (recommended)
-
-The repo ships a prebuilt `firmware_thumbyone_revert.uf2` — exactly the stock TinyCircuits MicroPython firmware (build `b8a2e6a`), with every UF2 block re-flagged as family `absolute` so the bootrom writes it at its declared addresses (0x10000000+) and overwrites the lobby region.
-
-1. Power off the Thumby Color.
-2. Hold **DOWN** on the d-pad and plug in USB.
-3. The device appears as `RPI-RP2350` on your computer.
-4. Drag `firmware_thumbyone_revert.uf2` onto it.
-5. The device reboots into stock firmware. Your ThumbyOne data is gone; the device is back to factory state with a fresh empty FAT.
-
-**After the revert, the device is fully stock — no partition table left in flash, no ThumbyOne traces.** Future stock firmware updates from TinyCircuits drag-and-drop normally (the standard update path on a stock Thumby Color). The recovery UF2 is only needed for the one-shot ThumbyOne → stock transition; from then on the device behaves exactly like a unit that's never had ThumbyOne installed.
-
-If you want to revert to a *different* custom firmware build than the bundled one - either flash the revert firmware first - then flash the custom one or you can repack it as absolute family yourself with the converter script in this repo:
-```
-python3 ThumbyOne/tools/uf2_repack_absolute.py firmware_<hash>.uf2 firmware_<hash>_recovery.uf2
-```
-Then drag the produced `_recovery.uf2` onto BOOTSEL the same way. picotool will report the rewritten file as `family ID 'absolute'`.
-
-#### Option B — picotool
-
-If you'd rather use a host-side tool than the recovery UF2, [picotool](https://github.com/raspberrypi/pico-sdk-tools/releases) (Raspberry Pi's official Pico command-line tool) can erase ThumbyOne's partition table and let the device accept any stock firmware UF2 directly.
-
-**Install picotool** (one-time, prebuilt binaries from Raspberry Pi's release page):
-
-*Linux x86_64:*
-```bash
-curl -LO https://github.com/raspberrypi/pico-sdk-tools/releases/download/v2.2.0-3/picotool-2.2.0-a4-x86_64-lin.tar.gz
-tar xzf picotool-2.2.0-a4-x86_64-lin.tar.gz
-sudo cp picotool/picotool /usr/local/bin/
-sudo cp picotool/udev/99-picotool.rules /etc/udev/rules.d/ 2>/dev/null || true
-sudo udevadm control --reload-rules && sudo udevadm trigger
-picotool version
-```
-
-*Linux aarch64* (Raspberry Pi OS, ARM laptops): same commands, swap `x86_64-lin` for `aarch64-lin` in the URL.
-
-*macOS:*
-```bash
-brew install picotool
-# or download picotool-2.2.0-a4-mac.zip from the release page above and unzip
-```
-
-*Windows:* download `picotool-2.2.0-a4-x64-win.zip` from the [release page](https://github.com/raspberrypi/pico-sdk-tools/releases/tag/v2.2.0-3), unzip it somewhere (e.g. `C:\picotool\`), and either add that folder to your `PATH` or invoke the binary directly. Windows also needs the libusb driver bound to the device — easiest path is [Zadig](https://zadig.akeo.ie/): with the Thumby Color in BOOTSEL, run Zadig, pick `RP2 Boot` from the device dropdown, choose `WinUSB` as the driver, and click `Replace Driver`. Picotool will then see it.
-
-**Run the recovery:**
-
-```
-# 1. Power off the Thumby Color, hold DOWN, plug in USB to enter BOOTSEL.
-# 2. Erase the chip (wipes ThumbyOne and its embedded partition table):
-picotool erase --all
-# 3. Load the stock firmware UF2 with an explicit target offset, and execute:
-picotool load <path-to-stock>.uf2 -o 0x10000000 -x
-```
-
-The `-o 0x10000000` flag tells picotool exactly where to put the bytes — without it, picotool refuses an `rp2350-arm-s` UF2 with `Family ID 'rp2350-arm-s' cannot be downloaded anywhere` (its own conservative check on movable UF2s when the chip has no partition table to map them onto). With the explicit offset picotool stops trying to interpret the family and just writes the blocks. The `-x` flag executes (boots) the firmware afterwards. Result: device boots stock firmware, no PT in flash, fully back to factory state.
+The official TinyCircuits stock firmware UF2 cannot be drag-flashed directly onto a ThumbyOne BOOTSEL drive — see [Returning to stock](#returning-to-stock) under Tips and troubleshooting for the why and the two recovery procedures (drag-and-drop revert UF2 / picotool).
 
 ---
 
@@ -645,6 +587,70 @@ The icon + description are optional (picker falls back to the directory name and
 ---
 
 ## Tips and troubleshooting
+
+### Returning to stock
+
+> ⚠️ **The official TinyCircuits stock firmware UF2 will NOT recover a ThumbyOne-installed device** if you drag it directly onto the BOOTSEL drive.
+>
+> Stock firmware ships as UF2 family `rp2350-arm-s`, which the RP2350 bootrom treats as a *movable* application image — it gets routed into one of ThumbyOne's slot partitions (which have `arm_boot 1` set), not over the lobby. The drive copy may even appear to succeed, but the device keeps booting ThumbyOne and the lobby never gets replaced. This is RP2350 bootrom behaviour, not a ThumbyOne bug — no partition-table tweak or firmware update fixes it. **Use one of the procedures below instead.**
+
+#### Option A — drag-and-drop the recovery UF2 (recommended)
+
+The repo ships a prebuilt `firmware_thumbyone_revert.uf2` — exactly the stock TinyCircuits MicroPython firmware (build `b8a2e6a`), with every UF2 block re-flagged as family `absolute` so the bootrom writes it at its declared addresses (0x10000000+) and overwrites the lobby region.
+
+1. Power off the Thumby Color.
+2. Hold **DOWN** on the d-pad and plug in USB.
+3. The device appears as `RPI-RP2350` on your computer.
+4. Drag `firmware_thumbyone_revert.uf2` onto it.
+5. The device reboots into stock firmware. Your ThumbyOne data is gone; the device is back to factory state with a fresh empty FAT.
+
+**After the revert, the device is fully stock — no partition table left in flash, no ThumbyOne traces.** Future stock firmware updates from TinyCircuits drag-and-drop normally (the standard update path on a stock Thumby Color). The recovery UF2 is only needed for the one-shot ThumbyOne → stock transition; from then on the device behaves exactly like a unit that's never had ThumbyOne installed.
+
+If you want to revert to a *different* custom firmware build than the bundled one - either flash the revert firmware first - then flash the custom one or you can repack it as absolute family yourself with the converter script in this repo:
+```
+python3 ThumbyOne/tools/uf2_repack_absolute.py firmware_<hash>.uf2 firmware_<hash>_recovery.uf2
+```
+Then drag the produced `_recovery.uf2` onto BOOTSEL the same way. picotool will report the rewritten file as `family ID 'absolute'`.
+
+#### Option B — picotool
+
+If you'd rather use a host-side tool than the recovery UF2, [picotool](https://github.com/raspberrypi/pico-sdk-tools/releases) (Raspberry Pi's official Pico command-line tool) can erase ThumbyOne's partition table and let the device accept any stock firmware UF2 directly.
+
+**Install picotool** (one-time, prebuilt binaries from Raspberry Pi's release page):
+
+*Linux x86_64:*
+```bash
+curl -LO https://github.com/raspberrypi/pico-sdk-tools/releases/download/v2.2.0-3/picotool-2.2.0-a4-x86_64-lin.tar.gz
+tar xzf picotool-2.2.0-a4-x86_64-lin.tar.gz
+sudo cp picotool/picotool /usr/local/bin/
+sudo cp picotool/udev/99-picotool.rules /etc/udev/rules.d/ 2>/dev/null || true
+sudo udevadm control --reload-rules && sudo udevadm trigger
+picotool version
+```
+
+*Linux aarch64* (Raspberry Pi OS, ARM laptops): same commands, swap `x86_64-lin` for `aarch64-lin` in the URL.
+
+*macOS:*
+```bash
+brew install picotool
+# or download picotool-2.2.0-a4-mac.zip from the release page above and unzip
+```
+
+*Windows:* download `picotool-2.2.0-a4-x64-win.zip` from the [release page](https://github.com/raspberrypi/pico-sdk-tools/releases/tag/v2.2.0-3), unzip it somewhere (e.g. `C:\picotool\`), and either add that folder to your `PATH` or invoke the binary directly. Windows also needs the libusb driver bound to the device — easiest path is [Zadig](https://zadig.akeo.ie/): with the Thumby Color in BOOTSEL, run Zadig, pick `RP2 Boot` from the device dropdown, choose `WinUSB` as the driver, and click `Replace Driver`. Picotool will then see it.
+
+**Run the recovery:**
+
+```
+# 1. Power off the Thumby Color, hold DOWN, plug in USB to enter BOOTSEL.
+# 2. Erase the chip (wipes ThumbyOne and its embedded partition table):
+picotool erase --all
+# 3. Load the stock firmware UF2 with an explicit target offset, and execute:
+picotool load <path-to-stock>.uf2 -o 0x10000000 -x
+```
+
+The `-o 0x10000000` flag tells picotool exactly where to put the bytes — without it, picotool refuses an `rp2350-arm-s` UF2 with `Family ID 'rp2350-arm-s' cannot be downloaded anywhere` (its own conservative check on movable UF2s when the chip has no partition table to map them onto). With the explicit offset picotool stops trying to interpret the family and just writes the blocks. The `-x` flag executes (boots) the firmware afterwards. Result: device boots stock firmware, no PT in flash, fully back to factory state.
+
+### Other tips
 
 **The picker takes a few seconds to appear after I pick a system.**
 That's the bootrom chaining into the slot partition — NES in particular has to re-initialise USB clocks and LCD DMA. P8 is snappy; DOOM is basically instant.
