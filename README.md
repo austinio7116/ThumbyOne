@@ -328,7 +328,7 @@ The repo ships a prebuilt `firmware_thumbyone_revert.uf2` — exactly the stock 
 
 **After the revert, the device is fully stock — no partition table left in flash, no ThumbyOne traces.** Future stock firmware updates from TinyCircuits drag-and-drop normally (the standard update path on a stock Thumby Color). The recovery UF2 is only needed for the one-shot ThumbyOne → stock transition; from then on the device behaves exactly like a unit that's never had ThumbyOne installed.
 
-If you want to revert to a *different* stock firmware build than the bundled one (a newer download from [color.thumby.us](https://color.thumby.us/pages/firmware-and-updating/firmware-and-updating/), say), repack it as absolute family yourself with the converter script in this repo:
+If you want to revert to a *different* custom firmware build than the bundled one - either flash the revert firmware first - then flash the custom one or you can repack it as absolute family yourself with the converter script in this repo:
 ```
 python3 ThumbyOne/tools/uf2_repack_absolute.py firmware_<hash>.uf2 firmware_<hash>_recovery.uf2
 ```
