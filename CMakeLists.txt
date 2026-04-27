@@ -64,6 +64,22 @@ if (THUMBYONE_WITH_MD)
     add_compile_definitions(THUMBYONE_WITH_MD=1)
 endif()
 
+# THUMBYONE_WITH_PCE: include the PC Engine / TurboGrafx-16 core
+# (HuExpress) in the ThumbyNES slot. Adds ~143 KB of flash on top of
+# MD; with MD+PCE the NES partition lands at ~1.95 MB / 2 MB capacity.
+# No partition table change required — fits inside the existing
+# WITH_MD layout. Default ON since the cost is acceptable.
+option(THUMBYONE_WITH_PCE  "Include PC Engine (HuExpress) in ThumbyNES" ON)
+if (THUMBYONE_WITH_PCE AND NOT THUMBYONE_WITH_NES)
+    message(FATAL_ERROR "THUMBYONE_WITH_PCE requires THUMBYONE_WITH_NES — PCE lives inside the NES slot.")
+endif()
+# ThumbyNES's CMakeLists checks DEFINED THUMBYONE_WITH_PCE, so always
+# set the variable explicitly (true/false) regardless of value here.
+# A compile define is also useful if any C code wants to know.
+if (THUMBYONE_WITH_PCE)
+    add_compile_definitions(THUMBYONE_WITH_PCE=1)
+endif()
+
 # ----- Shared library --------------------------------------------------
 # Brings in the handoff API + slot_layout.h + THUMBYONE_PT_JSON.
 add_subdirectory(common)

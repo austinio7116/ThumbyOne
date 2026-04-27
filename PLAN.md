@@ -5,6 +5,14 @@
 > lobby, and every slot returns via an explicit menu item. See
 > [`README.md`](README.md) for the current user-facing summary.
 > This file is kept as design history / future-work notes.
+>
+> **This document is *early planning*** — the size estimates, slot
+> sizes, and per-system breakdowns reflect the project before MD or
+> PCE were added to the NES slot. Do **not** treat the numbers below
+> as current truth; they are deliberately preserved as the starting
+> assumption. Refer to `common/slot_layout.h` for the authoritative
+> partition map and the per-slot READMEs / build output for current
+> resident-RAM and flash usage.
 
 **Goal.** One firmware image the user flashes once that bundles any
 combination of:

@@ -435,6 +435,14 @@ The icon + description are optional (picker falls back to the directory name and
   factory firmware. Walkthrough lives in
   [Tips and troubleshooting → Returning to stock](#returning-to-stock).
 
+- **Screenshot persistence on power-off.** MENU+A snapshot in any
+  emulator (NES / SMS / GG / GB / MD / PCE) now flushes the FAT
+  write-cache to flash immediately. Previously a power-off (or USB
+  pull) before the next battery_save / cfg_save would lose the
+  shot. Quitting through the in-game menu always saved correctly
+  because the menu's flush picked up the pending writes; only
+  hard-power-off lost them.
+
 ### 1.07
 
 - **MD pad B stuck on second cart load — fixed.** Launching a
@@ -1153,6 +1161,7 @@ Drop replacement PNGs into `lobby/icons/` (same filenames: `nes.png`, `p8.png`, 
 ## Known limits / future work
 
 - **Cross-slot chord for DOOM.** DOOM's in-game Quit menu returns to the lobby, and MENU-long-hold works for MPY/NES/P8. DOOM doesn't honour a long-hold chord yet — user has to go through the menu.
+- **PCE wild write — workaround in place, root cause open.** PCE init produces a wild write somewhere we couldn't pinpoint with leading + trailing 256-byte canaries on every PCE allocation. The workaround pads every `my_special_alloc` allocation with 256 bytes on each side (~15 KB heap overhead per PCE session) so the wild write lands harmlessly. Symptoms before the workaround: any 32 KB malloc/free cycle in the same firmware-image session (notably `nes_menu_run`'s fb_dim) corrupted newlib's free-list and hung the next 64 KB malloc — surfaced most easily as PCE → SMS hanging at SMS render_init's malloc(64 KB). See `ThumbyNES/PCE_HEAP_BUG.md` for the full investigation, what's been ruled out, and where to start if you ever pick this back up.
 
 ## Repo layout
 
