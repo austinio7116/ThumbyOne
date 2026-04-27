@@ -394,6 +394,35 @@ The icon + description are optional (picker falls back to the directory name and
 
 ## Changelog
 
+### 1.09
+
+Small follow-up to 1.08 that lines the FILL/CROP behaviour up across
+every emulator core and tidies a couple of PCE labelling misses.
+
+- **NES / SMS / GG / GB CROP harmonised to LB + d-pad.** Previously
+  NES and SMS paused the cart and panned with bare d-pad; GG and GB
+  panned via MENU + d-pad. All four now keep the cart running with
+  the **LB + d-pad** chord — same shape as MD and PCE. Tap LB still
+  maps to SELECT on NES / GB (strip-and-pulse pattern); SMS / GG
+  don't bind LB cart-side, so it's just the pan modifier. The
+  "pause and read NES dialogue" feature is gone — the in-game
+  menu's *Resume* anchor still pauses if you need to step away.
+- **SMS FILL is now horizontally pannable** with LB + L/R (range
+  0..64 source pixels). The 192-col centre slice was hard-coded
+  in 1.08; you can now pick which third of the SMS image gets
+  cropped off.
+- **PCE FILL pan defaults to centred per-cart**, computed from the
+  running game's actual viewport instead of a hard-coded 16. Lands
+  centred on 256×224 (Bonk, Soldier Blade), 256×240 (R-Type), and
+  336× modes. The hard-coded value pinned wider/taller modes
+  against the right edge.
+- **Lobby NES tile label now lists PCE** — bottom-of-screen tagline
+  reads `NES / SMS / GG / GB / MD / PCE` (or without `/ MD` in the
+  no-MD build).
+- **Picker hero view shows "PC ENGINE"** as the tab label — was a
+  silent miss in 1.08 (the tab-bar icon was already there, the
+  big system label below the thumbnail wasn't).
+
 ### 1.08
 
 - **PC Engine / TurboGrafx-16 (HuCard) support** — sixth emulator
