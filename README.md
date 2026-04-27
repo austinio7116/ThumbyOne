@@ -416,11 +416,7 @@ The icon + description are optional (picker falls back to the directory name and
 
 - **Tab strip facelift in the picker.** The procedurally-drawn
   console icons in the ThumbyNES picker tab strip are replaced by
-  hand-painted 12×8 bitmaps — 392 bytes total, smaller than the
-  drawing code they replace. Same bitmaps now drive the
-  no-screenshot placeholder thumbnails (nearest-neighbour upscaled).
-  SMS and MD tabs use a slightly darker grey when inactive because
-  their wider silhouettes were visually dominating the strip.
+  hand-painted 12×8 bitmaps.
 
 - **LCD cold-boot reliability.** The lobby's GC9107 init now issues
   an explicit `SWRESET` + `INVOFF` before configuring orientation
