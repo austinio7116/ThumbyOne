@@ -5,7 +5,7 @@
 > *One firmware to rule them all, one lobby to find them.*
 > *One file to bring them all, and in the Thumby bind them.*
 
-ThumbyOne is a unified multi-boot firmware for the [TinyCircuits Thumby Color](https://thumby.us/) — the pocketable colour handheld with a 128×128 screen and a pair of buttons that somehow play Doom. One flash gives you **NES**, **Master System**, **Game Gear**, **Game Boy**, **Mega Drive (Genesis)**, **PC Engine / TurboGrafx-16**, **PICO-8**, **DOOM**, and the full **MicroPython + Tiny Game Engine** experience, each running with the whole device to itself.
+ThumbyOne is a unified multi-boot firmware for the [TinyCircuits Thumby Color](https://thumby.us/) — the pocketable colour handheld with a 128×128 screen, Arm M33 processor, 512MB RAM and a 16GB Flash drive. One flash gives you **NES**, **Master System**, **Game Gear**, **Game Boy**, **Mega Drive (Genesis)**, **PC Engine / TurboGrafx-16**, **PICO-8**, **DOOM**, and the full **MicroPython + Tiny Game Engine** experience, each running with the whole device to itself.
 
 <p align="center">
   <img src="docs/screenshots/nes-game.jpg" width="240" alt="NES on Thumby Color">
@@ -57,9 +57,9 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
 > Flashing ThumbyOne **replaces the stock TinyCircuits firmware** with a completely different system. This is a full takeover, not an overlay:
 >
 > - **The TinyCircuits launcher, stock games, and system files will be gone.** The shared FAT (8.6 MB in the default MD-enabled build, 9.6 MB with `THUMBYONE_WITH_MD=OFF`) is formatted on first boot of ThumbyOne — anything you had on the device (saves, scores, installed games) is wiped.
-> - The device is easy to flash back to stock afterwards — just drop the official TinyCircuits `.uf2` onto the bootloader drive the same way. But stock firmware **doesn't expose a USB drive** — to back up anything from stock first (e.g. save files under `/Saves/`), connect via [Thonny](https://color.thumby.us/pages/getting-started-with-thonny/getting-started-with-thonny/) or `mpremote` and pull files over the REPL. Do that **before** flashing ThumbyOne.
+> - The device is easy to flash back to stock afterwards — see instructions below. But stock firmware **doesn't expose a USB drive** — to back up anything from stock first (e.g. save files under `/Saves/`), connect via [Thonny](https://color.thumby.us/pages/getting-started-with-thonny/getting-started-with-thonny/) or `mpremote` and pull files over the REPL. Do that **before** flashing ThumbyOne.
 > - ThumbyOne uses its own filesystem layout (`/roms/`, `/carts/`, `/games/`) — stock `/Games/` Python games won't be visible until you move them into `/games/`.
-> - There is **no going back to stock with your data intact** once ThumbyOne has first-booted.
+> - There is **no going back to stock with your data intact unless you back it up first** once ThumbyOne has first-booted.
 >
 > If that all sounds fine, carry on.
 
@@ -448,7 +448,7 @@ The icon + description are optional (picker falls back to the directory name and
 - **MD pad B stuck on second cart load — fixed.** Launching a
   second MD cart inside the same slot session left pad B reading
   as held from the first frame — Cannon Fodder firing constantly,
-  Sonic ignoring the first jump press, any cart that polls B
+  Sonic ignoring the jump downpress so only jumping on release, any cart that polls B
   affected. First launch was fine; only subsequent launches broke.
   See the [ThumbyNES v1.07 changelog](https://github.com/austinio7116/ThumbyNES#v107--defrag-overhaul-md-b-stuck-fix-300-mhz-removed)
   for the technical write-up.
@@ -1086,7 +1086,7 @@ That extra heap is what unblocked import-heavy startup cases like Thumbalaga (Me
 - **Icon pipeline**: [`tools/pack_icons.py`](tools/pack_icons.py) runs at build time, reads the four PNGs in `lobby/icons/`, quantises each to a 16-colour adaptive palette, packs two 4-bit indices per byte → ~1.1 KB per icon + 32 bytes palette. Total icon data: ~4.8 KB, vs ~18 KB for raw RGB565. The blitter in [`lobby/lobby_icons.c`](lobby/lobby_icons.c) decodes on the fly — one shift + one palette lookup per pixel.
 - **Grid**: 2×2 of 48×48 tiles at positions `(12,12)`, `(68,12)`, `(12,68)`, `(68,68)`. D-pad navigation via XOR on the cursor (UP/DOWN flip bit 1, LEFT/RIGHT flip bit 0).
 - **Greyed tiles**: disabled slots (via `THUMBYONE_WITH_*` build flags) are drawn normally then per-channel right-shifted by 2 in place — a 1/4-brightness overlay that reads as "present but unavailable" rather than "missing".
-- **USB state row**: top strip re-renders every 100 ms to reflect mount / activity state. Idle → dim-grey dot + "USB"; mounted → blue dot; transferring → red dot. The physical RGB LED (PWM on GP10/11/12) mirrors the same state at full brightness.
+- **USB state row**: top strip re-renders every 100 ms to reflect mount / activity state. Idle → green dot + "USB"; mounted → blue dot; transferring → red dot. The physical RGB LED (PWM on GP10/11/12) mirrors the same state at full brightness.
 
 ## Build system
 
@@ -1205,7 +1205,7 @@ ThumbyOne stitches together a lot of work by a lot of people.
 
 Each system in ThumbyOne is a complete standalone firmware in its own repo; ThumbyOne just composes them. Full docs + standalone builds live at:
 
-- **[ThumbyNES](https://github.com/austinio7116/ThumbyNES)** — NES / SMS / GG / Game Boy emulator
+- **[ThumbyNES](https://github.com/austinio7116/ThumbyNES)** — NES / SMS / GG / Game Boy / Mega Drive / PC Engine emulator
 - **[ThumbyP8](https://github.com/austinio7116/P8Thumb)** — PICO-8 fantasy console
 - **[ThumbyDOOM](https://github.com/austinio7116/ThumbyDOOM)** — shareware DOOM
 - **[TinyCircuits-Tiny-Game-Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine)** (austinio7116 fork) — MicroPython + engine slot
@@ -1220,6 +1220,8 @@ Each system in ThumbyOne is a complete standalone firmware in its own repo; Thum
   - **[smsplus](https://github.com/ducalex/retro-go)** (from the retro-go fork of Charles MacDonald's original) — Master System / Game Gear Z80 + VDP + PSG.
   - **[Peanut-GB](https://github.com/deltabeard/Peanut-GB)** by Mahyar Koshkouei (deltabeard) — Game Boy DMG core; CGB support added by Frans Hoedemakers in the **[pico-peanutGB fork](https://github.com/fhoedemakers/pico-peanutGB)** which ThumbyNES vendors.
   - **[minigb_apu / MiniGBS](https://github.com/baines/MiniGBS)** by Alex Baines — Game Boy APU, paired with Peanut-GB.
+  - **[PicoDrive](https://github.com/notaz/picodrive)** by notaz (Grazvydas Ignotas) — Mega Drive / Genesis 68K + Z80 + VDP + YM2612 / SN76489. ThumbyNES vendors a HuCard-only-style trim with the FAME 68K and CZ80 cores.
+  - **[HuExpress](https://github.com/ducalex/retro-go)** (from the retro-go ODROID-GO fork of David Michel and Cédric Stiehl's [Hu-Go!](http://www.zeograd.com/parent.php?section=hugo)) — PC Engine / TurboGrafx-16 HuC6280 + VDC + VCE + PSG. ThumbyNES strips it down to HuCards-only and replaces the upstream full-frame renderer with a per-scanline composite.
 - **[rp2040-doom](https://github.com/kilograham/rp2040-doom)** — Graham Sanderson's tour-de-force DOOM port (Chocolate Doom → RP2040/RP2350).
 - **[Lexaloffle](https://www.lexaloffle.com/)** — creators of PICO-8. ThumbyP8 is a clean-room implementation of the documented API; if you play carts you like, [buy PICO-8](https://www.lexaloffle.com/pico-8.php) to support the creators and the community.
 - **[MicroPython](https://micropython.org/)** — Damien George and contributors.
