@@ -5,7 +5,7 @@
 > *One firmware to rule them all, one lobby to find them.*
 > *One file to bring them all, and in the Thumby bind them.*
 
-ThumbyOne is a unified multi-boot firmware for the [TinyCircuits Thumby Color](https://thumby.us/) — the pocketable colour handheld with a 128×128 screen and a pair of buttons that somehow play Doom. One flash gives you **NES**, **Master System**, **Game Gear**, **Game Boy**, **Mega Drive (Genesis)**, **PICO-8**, **DOOM**, and the full **MicroPython + Tiny Game Engine** experience, each running with the whole device to itself.
+ThumbyOne is a unified multi-boot firmware for the [TinyCircuits Thumby Color](https://thumby.us/) — the pocketable colour handheld with a 128×128 screen and a pair of buttons that somehow play Doom. One flash gives you **NES**, **Master System**, **Game Gear**, **Game Boy**, **Mega Drive (Genesis)**, **PC Engine / TurboGrafx-16**, **PICO-8**, **DOOM**, and the full **MicroPython + Tiny Game Engine** experience, each running with the whole device to itself.
 
 <p align="center">
   <img src="docs/screenshots/nes-game.jpg" width="240" alt="NES on Thumby Color">
@@ -39,7 +39,7 @@ No per-system re-flashing.
 
 | System | What it plays | Content goes in |
 |---|---|---|
-| **ThumbyNES** | `.nes` (NES), `.sms` (Master System), `.gg` (Game Gear), `.gb` / `.gbc` (Game Boy + Color), `.md` / `.gen` / `.bin` (Mega Drive / Genesis) | `/roms/` |
+| **ThumbyNES** | `.nes` (NES), `.sms` (Master System), `.gg` (Game Gear), `.gb` / `.gbc` (Game Boy + Color), `.md` / `.gen` / `.bin` (Mega Drive / Genesis), `.pce` (PC Engine / TurboGrafx-16 HuCard) | `/roms/` |
 | **ThumbyP8** | `.p8.png` PICO-8 carts | `/carts/` |
 | **ThumbyDOOM** | Shareware DOOM I — WAD baked into the firmware | *(none — embedded)* |
 | **MicroPython + Engine** | Python games written against the [Tiny Game Engine](https://github.com/austinio7116/TinyCircuits-Tiny-Game-Engine) | `/games/<name>/` |
@@ -197,7 +197,7 @@ No driver weirdness, no Windows Format dialog, no `mpremote` incantations. LB + 
 
 ## The systems
 
-### ThumbyNES — NES / Master System / Game Gear / Game Boy / Mega Drive / Genesis
+### ThumbyNES — NES / Master System / Game Gear / Game Boy / Mega Drive / Genesis / PC Engine
 
 *Based on [ThumbyNES](https://github.com/austinio7116/ThumbyNES) — see that repo for the standalone firmware, the full feature list, and detailed docs.*
 
@@ -207,9 +207,11 @@ No driver weirdness, no Windows Format dialog, no `mpremote` incantations. LB + 
   <img src="docs/screenshots/nes-menu.jpg" width="240" alt="In-game menu overlay">
 </p>
 
-A five-in-one retro emulator running Nofrendo for NES, smsplus for Master System + Game Gear, Peanut-GB (fhoedemakers' CGB fork + minigb_apu) for Game Boy DMG and Color, and PicoDrive for Sega Mega Drive / Genesis. Drop `.nes`, `.sms`, `.gg`, `.gb`, `.gbc`, `.md`, `.gen`, or `.bin` into `/roms/`; the tabbed picker groups them by system, shows thumbnails and metadata, and lets you favourite.
+A six-in-one retro emulator running Nofrendo for NES, smsplus for Master System + Game Gear, Peanut-GB (fhoedemakers' CGB fork + minigb_apu) for Game Boy DMG and Color, PicoDrive for Sega Mega Drive / Genesis, and HuExpress (ODROID-GO fork of Hu-Go!) for PC Engine / TurboGrafx-16 HuCards. Drop `.nes`, `.sms`, `.gg`, `.gb`, `.gbc`, `.md`, `.gen`, `.bin`, or `.pce` into `/roms/`; the tabbed picker groups them by system, shows thumbnails and metadata, and lets you favourite.
 
-**MD note:** PicoDrive adds ~850 KB of precomputed flash tables (FAME jumptable + YM2612 + cz80 SZHVC), pushing the NES slot past the default 1 MB partition. ThumbyOne's default build (`THUMBYONE_WITH_MD=ON`) grows the NES partition to 2 MB to hold it, shifting every downstream partition and the shared FAT up by 1 MB. Build with `-DTHUMBYONE_WITH_MD=OFF` for the backward-compatible 1 MB layout (NES/SMS/GB only, original 9.6 MB FAT).
+**MD note:** PicoDrive adds ~850 KB of precomputed flash tables (FAME jumptable + YM2612 + cz80 SZHVC), pushing the NES slot past the default 1 MB partition. ThumbyOne's default build (`THUMBYONE_WITH_MD=ON`) grows the NES partition to 2 MB to hold it, shifting every downstream partition and the shared FAT up by 1 MB. Build with `-DTHUMBYONE_WITH_MD=OFF` for the backward-compatible 1 MB layout (NES / SMS / GB only, original 9.6 MB FAT).
+
+**PCE note:** The PC Engine core is the smallest of the six in flash terms — about **70 KB code + 5 KB BSS + 97 KB working heap** after a HuCard-only trim (CD support, the 74 KB CD-track table, Arcade Card, netplay, and the SDL / Haiku / iniconfig frontends are all stripped at vendor time). It fits comfortably inside the existing slot in **both** the `WITH_MD=ON` and `WITH_MD=OFF` builds, so adding PCE in 1.08 doesn't change the partition layout — the 8.6 MB / 9.6 MB FAT stays exactly where it was in 1.07, with no migration on upgrade. PCE rendering is done with a custom per-scanline compositor that writes straight into the LCD framebuffer (the upstream `XBUF` / `SPM` / `VRAM2` / `VRAMS` scratch buffers were 568 KB combined and didn't fit on Thumby Color); the h6280 dispatcher runs from static IRAM for performance; PSG audio mixes mono through the same PWM mixer as the other cores with a single-pole low-pass matching the analog DAC rolloff. Six-emulator coexistence in the slot also drove a heap-leak audit in HuExpress and (incidentally) smsplus — see the [ThumbyNES v1.08 changelog](https://github.com/austinio7116/ThumbyNES#v108--pc-engine--turbograf16-tab-strip-facelift-lcd-reliability) for the full technical write-up.
 
 <p align="center">
   <img src="docs/screenshots/nes-sms.jpg" width="240" alt="Sonic on Master System">
@@ -222,16 +224,20 @@ A five-in-one retro emulator running Nofrendo for NES, smsplus for Master System
   <img src="docs/screenshots/md-cannon-fodder.jpg" width="240" alt="Cannon Fodder on Mega Drive (newly playable in 1.06)">
 </p>
 
+<!-- TODO: PCE shot row — capture once 1.08 is flashed -->
+
 **Features:**
 
 - Per-ROM save states, per-ROM settings, favorites
 - In-game pause menu (MENU button)
 - Fast-forward, palette switching, idle sleep
 - Live-pan read mode for Game Boy / GG (the 128×128 screen is narrower than the native output; pan to see the edges)
+- Play-while-cropped pan chord (LB + d-pad) for MD and PCE — pan the source viewport without losing game control
 - Game Boy Color carts run with their native CGB palette (DMG carts use the six built-in shade palettes)
 - Chained-XIP fallback — fragmented ROMs still map from flash and run full-speed without a defrag
 - Cluster-level defragmenter with before/after preview and live move visualisation (picker menu → **Defragment now**)
 - Configurable CPU clock per-ROM
+- Hand-painted 12×8 tab icons in the picker (new in 1.08) — same bitmaps drive the no-screenshot placeholder thumbnails
 
 **ThumbyOne differences:**
 
@@ -387,6 +393,47 @@ The icon + description are optional (picker falls back to the directory name and
 ---
 
 ## Changelog
+
+### 1.08
+
+- **PC Engine / TurboGrafx-16 (HuCard) support** — sixth emulator
+  in the ThumbyNES slot. Drop `.pce` ROMs into `/roms/`; the picker
+  gets a new **PCE** tab. Plays HuCards at native 60 fps on the
+  250 MHz overclock with PSG audio, save state, region detect,
+  master volume. Available in **both** `WITH_MD=ON` and `WITH_MD=OFF`
+  builds — the HuCard-only core fits inside the existing slot
+  partition, so **upgrading from 1.07 doesn't trigger a FAT
+  migration**: the volume you have today mounts untouched.
+  See the [ThumbyNES v1.08 changelog](https://github.com/austinio7116/ThumbyNES#v108--pc-engine--turbograf16-tab-strip-facelift-lcd-reliability)
+  for the technical write-up — HuExpress trim (~70 KB flash, no CD
+  / Arcade Card / netplay), per-scanline renderer that drops 568 KB
+  of upstream scratch buffers to fit Thumby Color's 520 KB SRAM,
+  static-IRAM `exe_go` for performance, PSG audio with mono-mix
+  workaround for an upstream stereo memset bug, JP-default region
+  detect (Hudson cart pre-decoding makes US carts boot from the JP
+  code path), 0xFC + VDC-reg-select strict-abort fixes for
+  HuCard compatibility, six-core heap-leak audit (HuExpress + smsplus).
+
+- **Tab strip facelift in the picker.** The procedurally-drawn
+  console icons in the ThumbyNES picker tab strip are replaced by
+  hand-painted 12×8 bitmaps — 392 bytes total, smaller than the
+  drawing code they replace. Same bitmaps now drive the
+  no-screenshot placeholder thumbnails (nearest-neighbour upscaled).
+  SMS and MD tabs use a slightly darker grey when inactive because
+  their wider silhouettes were visually dominating the strip.
+
+- **LCD cold-boot reliability.** The lobby's GC9107 init now issues
+  an explicit `SWRESET` + `INVOFF` before configuring orientation
+  and pixel format. Fixes a rare cold-boot artefact where the panel
+  came up rotated 180° or with colours inverted until the next
+  power cycle. Same fix applied in the ThumbyNES slot's display
+  init.
+
+- **Stock-firmware recovery path.** A new `revert_uf2.py` tool
+  (`tools/`) repacks the local stock TinyCircuits firmware image
+  into a one-shot recovery UF2 for users who want to drop back to
+  factory firmware. Walkthrough lives in
+  [Tips and troubleshooting → Returning to stock](#returning-to-stock).
 
 ### 1.07
 
@@ -1075,7 +1122,7 @@ Example sizes (release builds):
 | MPY only | 3.2 MB | 9.6 MB |
 | DOOM only | 2.5 MB | 9.6 MB |
 
-The MD build adds ~2 MB to the UF2 (the picodrive library + its precomputed YM2612 / FAME / cz80 flash tables) and loses 1 MB of shared FAT to the enlarged NES partition.
+The MD build adds ~2 MB to the UF2 (the picodrive library + its precomputed YM2612 / FAME / cz80 flash tables) and loses 1 MB of shared FAT to the enlarged NES partition. PCE (added in 1.08) is HuCard-only and adds ~70 KB to the slot; it fits inside the existing partition and doesn't change the FAT layout.
 
 ## Build from source
 
