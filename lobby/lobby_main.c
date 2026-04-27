@@ -478,12 +478,12 @@ static void dim_tile(int x, int y, int shift) {
  * selected tile. Order matches the grid layout + lobby_icons[] /
  * g_grid_slot_order[]. The NES tile's label picks up /MD under
  * WITH_MD builds so the user sees at a glance that the slot also
- * runs Mega Drive / Genesis ROMs. */
+ * runs Mega Drive / Genesis / PC Engine ROMs. */
 static const char *const g_grid_labels[4] = {
 #if defined(THUMBYONE_WITH_MD) && THUMBYONE_WITH_MD
-    "NES / SMS / GG / GB / MD",
+    "NES / SMS / GG / GB / MD / PCE",
 #else
-    "NES / SMS / GG / GB",
+    "NES / SMS / GG / GB / PCE",
 #endif
     "PICO-8",
     "DOOM",
