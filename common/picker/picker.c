@@ -500,11 +500,21 @@ static void sort_mode_save(void) {
 static int has_main_py(const char *game_name) {
     size_t name_len = strlen(game_name);
     if (name_len > MAX_NAME_LEN) return 0;
-    char path[7 + MAX_NAME_LEN + 8 + 1];
+    /* Modern games have main.py; legacy original-Thumby games instead
+     * have <dirname>.py (the pre-Color launcher convention). Accept
+     * either so the user sees both kinds in the picker. The Python
+     * launcher (thumbyone_launcher.py) does the same fallback when
+     * exec()ing the chosen game. */
+    char path[7 + MAX_NAME_LEN + 1 + MAX_NAME_LEN + 3 + 1];
     memcpy(path, "/games/", 7);
     memcpy(path + 7, game_name, name_len);
     memcpy(path + 7 + name_len, "/main.py", 9);
     FILINFO fno;
+    if (f_stat(path, &fno) == FR_OK) return 1;
+    /* Build /games/<name>/<name>.py and probe. */
+    path[7 + name_len] = '/';
+    memcpy(path + 7 + name_len + 1, game_name, name_len);
+    memcpy(path + 7 + name_len + 1 + name_len, ".py", 4);
     return (f_stat(path, &fno) == FR_OK) ? 1 : 0;
 }
 
