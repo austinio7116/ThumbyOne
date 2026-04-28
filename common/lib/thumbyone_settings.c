@@ -116,3 +116,84 @@ bool thumbyone_settings_save_brightness(uint8_t brightness) {
     if (brightness > THUMBYONE_BRIGHTNESS_MAX) brightness = THUMBYONE_BRIGHTNESS_MAX;
     return write_pair(thumbyone_settings_load_volume(), brightness);
 }
+
+
+/* --- Legacy-thumby render settings on shared FAT ------------------ *
+ * These live in tiny ASCII files (one byte: '0'..'4' or '0'/'1')
+ * because the MPY slot is the sole consumer and reads via plain
+ * Python file I/O. Avoids the C-binding-from-MicroPython dance the
+ * flash-mirror path would require.
+ *
+ * DOOM doesn't link FatFs, so the FAT-using functions are stubbed
+ * out via __has_include guard. DOOM never reads or writes legacy-
+ * thumby settings anyway — they're MPY-slot-only. */
+#if __has_include("ff.h")
+#include "ff.h"
+#define THUMBYONE_SETTINGS_HAS_FAT 1
+#else
+#define THUMBYONE_SETTINGS_HAS_FAT 0
+#endif
+
+#if THUMBYONE_SETTINGS_HAS_FAT
+static uint8_t load_ascii_byte(const char *path, uint8_t lo, uint8_t hi, uint8_t dflt) {
+    FIL f;
+    if (f_open(&f, path, FA_READ) != FR_OK) return dflt;
+    uint8_t buf[2] = {0};
+    UINT br = 0;
+    f_read(&f, buf, 1, &br);
+    f_close(&f);
+    if (br < 1) return dflt;
+    if (buf[0] < '0' || buf[0] > '9') return dflt;
+    uint8_t v = (uint8_t)(buf[0] - '0');
+    if (v < lo || v > hi) return dflt;
+    return v;
+}
+
+static bool save_ascii_byte(const char *path, uint8_t v, uint8_t lo, uint8_t hi) {
+    if (v < lo) v = lo;
+    if (v > hi) v = hi;
+    if (v > 9) return false;   /* single-digit invariant */
+    FIL f;
+    if (f_open(&f, path, FA_CREATE_ALWAYS | FA_WRITE) != FR_OK) return false;
+    uint8_t buf[1] = { (uint8_t)('0' + v) };
+    UINT bw = 0;
+    bool ok = (f_write(&f, buf, 1, &bw) == FR_OK) && (bw == 1);
+    f_close(&f);
+    return ok;
+}
+
+uint8_t thumbyone_settings_load_legacy_scale(void) {
+    return load_ascii_byte("/.legacy_scale",
+                           THUMBYONE_LEGACY_SCALE_MIN,
+                           THUMBYONE_LEGACY_SCALE_MAX,
+                           THUMBYONE_LEGACY_SCALE_DEFAULT);
+}
+
+bool thumbyone_settings_save_legacy_scale(uint8_t idx) {
+    return save_ascii_byte("/.legacy_scale", idx,
+                           THUMBYONE_LEGACY_SCALE_MIN,
+                           THUMBYONE_LEGACY_SCALE_MAX);
+}
+
+uint8_t thumbyone_settings_load_legacy_fps(void) {
+    return load_ascii_byte("/.legacy_fps", 0, 1,
+                           THUMBYONE_LEGACY_FPS_DEFAULT);
+}
+
+bool thumbyone_settings_save_legacy_fps(uint8_t enabled) {
+    return save_ascii_byte("/.legacy_fps", enabled ? 1 : 0, 0, 1);
+}
+#else  /* DOOM build — no FatFs */
+uint8_t thumbyone_settings_load_legacy_scale(void) {
+    return THUMBYONE_LEGACY_SCALE_DEFAULT;
+}
+bool thumbyone_settings_save_legacy_scale(uint8_t idx) {
+    (void)idx; return false;
+}
+uint8_t thumbyone_settings_load_legacy_fps(void) {
+    return THUMBYONE_LEGACY_FPS_DEFAULT;
+}
+bool thumbyone_settings_save_legacy_fps(uint8_t enabled) {
+    (void)enabled; return false;
+}
+#endif

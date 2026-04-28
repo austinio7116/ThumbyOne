@@ -161,10 +161,12 @@ typedef enum {
     MI_FW,
     /* Selectable rows. */
     MI_SORT,
-    MI_VOL,       /* slider: LEFT/RIGHT adjusts /.volume */
-    MI_BRIGHT,    /* slider: LEFT/RIGHT adjusts /.brightness (live) */
+    MI_VOL,          /* slider: LEFT/RIGHT adjusts /.volume */
+    MI_BRIGHT,       /* slider: LEFT/RIGHT adjusts /.brightness (live) */
+    MI_LEGACY_SCALE, /* original-Thumby render scale (5-preset cycle) */
+    MI_LEGACY_FPS,   /* FPS overlay toggle for legacy thumby games */
     MI_CLOSE,
-    MI_LOBBY,     /* LAST — "press UP from top to wrap to back-out" */
+    MI_LOBBY,        /* LAST — "press UP from top to wrap to back-out" */
     MI_COUNT,
 } menu_item_t;
 
@@ -172,10 +174,17 @@ typedef enum {
 static bool menu_item_selectable(menu_item_t it) {
     switch (it) {
     case MI_SORT: case MI_VOL: case MI_BRIGHT:
+    case MI_LEGACY_SCALE: case MI_LEGACY_FPS:
     case MI_LOBBY: case MI_CLOSE: return true;
     default: return false;
     }
 }
+
+/* Human-readable labels for the legacy-scale slider — index matches
+ * the MPY slot's _SCALE_PRESETS table in thumby_render.py. */
+static const char *const LEGACY_SCALE_LABELS[] = {
+    "1.0x", "1.5x", "1.75x", "2.0x", "2.5x"
+};
 
 static bool g_menu_open = false;
 static int  g_menu_cursor = MI_SORT;   /* first selectable row */
@@ -938,16 +947,18 @@ static void menu_build_fw_row(menu_row_render_t *r) {
 
 static const char *menu_label(menu_item_t it) {
     switch (it) {
-    case MI_BATT:   return "batt";
-    case MI_DISK:   return "disk";
-    case MI_BY:     return "by";
-    case MI_FW:     return "fw";
-    case MI_SORT:   return "sort";
-    case MI_VOL:    return "VOLUME";
-    case MI_BRIGHT: return "BRIGHTNESS";
-    case MI_LOBBY:  return "back to lobby";
-    case MI_CLOSE:  return "close";
-    case MI_COUNT:  return "";
+    case MI_BATT:         return "batt";
+    case MI_DISK:         return "disk";
+    case MI_BY:           return "by";
+    case MI_FW:           return "fw";
+    case MI_SORT:         return "sort";
+    case MI_VOL:          return "VOLUME";
+    case MI_BRIGHT:       return "BRIGHTNESS";
+    case MI_LEGACY_SCALE: return "LCY ZOOM";
+    case MI_LEGACY_FPS:   return "LCY FPS";
+    case MI_LOBBY:        return "back to lobby";
+    case MI_CLOSE:        return "close";
+    case MI_COUNT:        return "";
     }
     return "";
 }
@@ -985,6 +996,10 @@ static int g_menu_vol = 0;
 static int g_menu_bri = 0;
 static int g_menu_vol_initial = 0;
 static int g_menu_bri_initial = 0;
+static int g_menu_lcy_scale         = 0;   /* preset index, 0..4 */
+static int g_menu_lcy_fps           = 0;   /* 0/1 toggle */
+static int g_menu_lcy_scale_initial = 0;
+static int g_menu_lcy_fps_initial   = 0;
 
 static void render_menu(int sel) {
     /* Synthesise the backdrop: re-render the hero into g_fb, then
@@ -1040,6 +1055,18 @@ static void render_menu(int sel) {
             /* Rendered below with a thick right-aligned slider —
              * no row.val text, no thin bar. */
             break;
+        case MI_LEGACY_SCALE:
+            strncpy(row.val, LEGACY_SCALE_LABELS[g_menu_lcy_scale],
+                    sizeof(row.val) - 1);
+            row.val[sizeof(row.val) - 1] = 0;
+            row.val_col = fg;
+            break;
+        case MI_LEGACY_FPS:
+            strncpy(row.val, g_menu_lcy_fps ? "ON" : "OFF",
+                    sizeof(row.val) - 1);
+            row.val[sizeof(row.val) - 1] = 0;
+            row.val_col = fg;
+            break;
         case MI_LOBBY:
         case MI_CLOSE:
         case MI_COUNT:
@@ -1085,12 +1112,14 @@ static void render_menu(int sel) {
     fb_rect(0, 128 - M_FOOTER_H, 128, 1, COL_TITLE);
     const char *hint;
     switch ((menu_item_t)g_menu_cursor) {
-    case MI_SORT:   hint = "<> sort  A cycle";  break;
-    case MI_VOL:    hint = "<> adjust";         break;
-    case MI_BRIGHT: hint = "<> adjust";         break;
-    case MI_LOBBY:  hint = "A return to lobby"; break;
-    case MI_CLOSE:  hint = "A close";           break;
-    default:        hint = "A select  B close"; break;
+    case MI_SORT:         hint = "<> sort  A cycle";  break;
+    case MI_VOL:          hint = "<> adjust";         break;
+    case MI_BRIGHT:       hint = "<> adjust";         break;
+    case MI_LEGACY_SCALE: hint = "<> zoom preset";    break;
+    case MI_LEGACY_FPS:   hint = "<> toggle";         break;
+    case MI_LOBBY:        hint = "A return to lobby"; break;
+    case MI_CLOSE:        hint = "A close";           break;
+    default:              hint = "A select  B close"; break;
     }
     int hw = nes_font_width(hint);
     nes_font_draw(g_fb, hint, (128 - hw) / 2,
@@ -1215,7 +1244,9 @@ int thumbyone_picker_run(void) {
              * you can still use it for consistency with the hero
              * view. UP/DOWN always navigates. */
             bool on_slider = (g_menu_cursor == MI_VOL ||
-                              g_menu_cursor == MI_BRIGHT);
+                              g_menu_cursor == MI_BRIGHT ||
+                              g_menu_cursor == MI_LEGACY_SCALE ||
+                              g_menu_cursor == MI_LEGACY_FPS);
             bool lt_edge = just_pressed(PIN_LEFT,  &prev_left);
             bool rt_edge = just_pressed(PIN_RIGHT, &prev_right);
 
@@ -1266,6 +1297,16 @@ int thumbyone_picker_run(void) {
                         thumbyone_led_set_rgb(0, 255, 0);
                         dirty = true;
                     }
+                } else if (g_menu_cursor == MI_LEGACY_SCALE) {
+                    if (g_menu_lcy_scale > THUMBYONE_LEGACY_SCALE_MIN) {
+                        g_menu_lcy_scale--;
+                        dirty = true;
+                    }
+                } else if (g_menu_cursor == MI_LEGACY_FPS) {
+                    if (g_menu_lcy_fps != 0) {
+                        g_menu_lcy_fps = 0;
+                        dirty = true;
+                    }
                 } else if (lt_edge) {
                     /* Non-slider rows: LEFT acts as UP for nav. */
                     menu_cursor_seek(-1);
@@ -1282,6 +1323,16 @@ int thumbyone_picker_run(void) {
                         if (g_menu_bri > THUMBYONE_BRIGHTNESS_MAX) g_menu_bri = THUMBYONE_BRIGHTNESS_MAX;
                         thumbyone_backlight_set((uint8_t)g_menu_bri);
                         thumbyone_led_set_rgb(0, 255, 0);
+                        dirty = true;
+                    }
+                } else if (g_menu_cursor == MI_LEGACY_SCALE) {
+                    if (g_menu_lcy_scale < THUMBYONE_LEGACY_SCALE_MAX) {
+                        g_menu_lcy_scale++;
+                        dirty = true;
+                    }
+                } else if (g_menu_cursor == MI_LEGACY_FPS) {
+                    if (g_menu_lcy_fps == 0) {
+                        g_menu_lcy_fps = 1;
                         dirty = true;
                     }
                 } else if (rt_edge) {
@@ -1326,6 +1377,12 @@ int thumbyone_picker_run(void) {
                     thumbyone_settings_save_brightness((uint8_t)g_menu_bri);
                     /* Already applied live via on_change; this just
                      * persists. */
+                }
+                if (g_menu_lcy_scale != g_menu_lcy_scale_initial) {
+                    thumbyone_settings_save_legacy_scale((uint8_t)g_menu_lcy_scale);
+                }
+                if (g_menu_lcy_fps != g_menu_lcy_fps_initial) {
+                    thumbyone_settings_save_legacy_fps((uint8_t)g_menu_lcy_fps);
                 }
                 load_selection_assets(sel);
                 render_hero(sel);
@@ -1393,8 +1450,12 @@ int thumbyone_picker_run(void) {
                  * only if moved. */
                 g_menu_vol = thumbyone_settings_load_volume();
                 g_menu_bri = thumbyone_settings_load_brightness();
+                g_menu_lcy_scale = thumbyone_settings_load_legacy_scale();
+                g_menu_lcy_fps   = thumbyone_settings_load_legacy_fps();
                 g_menu_vol_initial = g_menu_vol;
                 g_menu_bri_initial = g_menu_bri;
+                g_menu_lcy_scale_initial = g_menu_lcy_scale;
+                g_menu_lcy_fps_initial   = g_menu_lcy_fps;
                 render_menu(sel);
             }
 

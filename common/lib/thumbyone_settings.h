@@ -42,6 +42,20 @@ extern "C" {
 #define THUMBYONE_BRIGHTNESS_MAX   255
 #define THUMBYONE_BRIGHTNESS_DEFAULT 255
 
+/* Original-Thumby legacy game render scale, indexed into the MPY
+ * slot's preset table (1.0 / 1.5 / 1.75 / 2.0 / 2.5). 0 = pixel-
+ * perfect 72x40 centred (default). Stored as ASCII single-digit on
+ * the shared FAT at /.legacy_scale so the slot can read it without
+ * needing C-side bindings. */
+#define THUMBYONE_LEGACY_SCALE_MIN     0
+#define THUMBYONE_LEGACY_SCALE_MAX     4
+#define THUMBYONE_LEGACY_SCALE_DEFAULT 0
+
+/* Diagnostic FPS overlay in the bezel of legacy thumby games.
+ * 0 = off (default), 1 = on. Stored as ASCII single-digit at
+ * /.legacy_fps. */
+#define THUMBYONE_LEGACY_FPS_DEFAULT 0
+
 /* Read /.volume from the mounted shared FAT. Returns the byte,
  * clamped to [MIN, MAX]. If the file is missing / empty / unreadable,
  * returns THUMBYONE_VOLUME_DEFAULT. Caller must have already
@@ -56,6 +70,15 @@ uint8_t thumbyone_settings_load_brightness(void);
  * the shared FAT mounted writable. */
 bool thumbyone_settings_save_volume(uint8_t volume);
 bool thumbyone_settings_save_brightness(uint8_t brightness);
+
+/* Legacy-thumby render settings live on the shared FAT (rather than
+ * the flash-sector mirror used for volume/brightness) because the
+ * MPY slot is the only consumer and it can read them via plain
+ * file I/O — no C bindings, no XIP mirror. */
+uint8_t thumbyone_settings_load_legacy_scale(void);
+bool    thumbyone_settings_save_legacy_scale(uint8_t idx);
+uint8_t thumbyone_settings_load_legacy_fps(void);
+bool    thumbyone_settings_save_legacy_fps(uint8_t enabled);
 
 #ifdef __cplusplus
 }
