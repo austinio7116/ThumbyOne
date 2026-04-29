@@ -390,9 +390,103 @@ MicroPython with the Tiny Game Engine C module baked in, running a custom C pick
 
 The icon + description are optional (picker falls back to the directory name and a placeholder tile), but having them makes your game look at home next to everything else on the picker.
 
+**Original (monochrome) Thumby games — supported as of 1.10.** Drop a classic 72×40 mono Thumby game folder into `/games/<name>/` and it appears on the same picker, scaled to the colour screen with the original gameplay intact. Buttons, audio, save format, and Timendus's `thumbyGrayscale` library are all shimmed transparently — no game code modification needed. See the [1.10 changelog](#110) for the supported feature set and known caveats; the technical write-up of how the shim works (and what we had to revert in MicroPython to make Umby & Glow's viper-tag trick work) is in [MicroPython + engine slot](#micropython--engine-slot).
+
 ---
 
 ## Changelog
+
+### 1.10
+
+Original (monochrome) Thumby games run inside the MPY slot, with audio
+that respects the lobby slider across both tone-style legacy games
+(Umby & Glow, CosmicSurvivor, Gravity, TinyGolf, …) and PCM-streaming
+ones (BadApple). No game code is modified — everything is a launcher-
+side shim or a deliberate firmware-level revert.
+
+- **Original Thumby games supported.** Classic 72×40 monochrome
+  Thumby games launch from the same hero picker as Color games, with
+  configurable per-game scale (1×, NN, smooth) and an optional FPS
+  overlay. A launcher-side compatibility layer transparently
+  redirects:
+  - **Buttons** — the original Thumby's GPIO 3/4/5/6 (d-pad), 24 (B),
+    27 (A) get aliased onto Color's `engine_io` button state. Active-
+    low semantics are preserved so games that read `Pin(N).value()`
+    expecting `0 == pressed` get the right thing.
+  - **Buzzer audio** — `PWM(Pin(28))` (the original Thumby buzzer pin,
+    unconnected on Color) is rerouted to the engine's pin-23 PWM via
+    a `_LegacyBuzzerPwm` shim. The shim auto-detects two regimes:
+    *tone mode* (PWM carrier in the audible band, used by
+    `thumby.audio.set/play` and direct-PWM tone games) gets cube-
+    scaled volume so the slider has a perceptually-linear response;
+    *PCM mode* (carrier ≥ 20 kHz, used by BadApple's 4-bit DAC at
+    8 kHz) gets a linearly-attenuated swing centred on 50 % duty so
+    the class-D amp stays inside its linear region instead of
+    railing.
+  - **Hardware-conflict pins** — original Thumby's UART link cable
+    pins (GPIO 0 / 1 / 2) collide with Color's d-pad on the same
+    GPIOs. Games that try to reconfigure them as outputs (Umby &
+    Glow's `comms.py`, RocketCup's link code) hit a no-op `_NoopPin`
+    so the d-pad keeps working.
+  - **`UART(0)`** — non-functional on Color (no link-cable pins) but
+    silently swallowed so multiplayer-link constructors don't crash;
+    single-player still works.
+- **Grayscale library** — Color-aware port of Timendus's
+  [`thumby-grayscale`](https://github.com/Timendus/thumby-grayscale)
+  is frozen into firmware. Games that import `thumbyGrayscale`
+  (Umby & Glow, LyteBykes, Foxgine, RocketCup, etc.) get the same
+  4-shade 72×40 buffer + shading-plane API, blitted to the colour
+  screen via the bare-metal shadow-framebuffer path with a fixed
+  4-entry RGB565 palette (black / dark grey / light grey / white).
+  The library defaults `frameRate = 30` to match the original's
+  effective rate (the original's GPU thread fakes shading via
+  rapid SPI sub-frame pacing on the SSD1306; we collapse that to
+  a single full-frame blit at 30 Hz).
+- **MicroPython viper `STORE_ATTR` reverted to MP 1.19.1 behaviour.**
+  Umby & Glow uses a hand-rolled small-int tag idiom — `expr << 1 |
+  1` — to skip per-tick `mp_obj_new_int` heap allocation in viper-
+  compiled physics functions. The trick worked on MP 1.19.1 (the
+  original Thumby firmware) but upstream commit `9714a0e` (Jul 2022)
+  added a `MP_F_CONVERT_NATIVE_TO_OBJ` boxing call to viper's
+  `STORE_ATTR` codegen, which double-encoded the tagged value and
+  caused exponential numerical blow-up within a few game ticks. We
+  revert that one commit in our `mp-thumby` fork so the trick stores
+  the raw 32-bit word straight through to `mp_store_attr` again,
+  matching MP 1.19.1. Caveat documented inline: viper attribute
+  stores must use Python objects or pre-tagged small ints, never
+  raw native ints. Stock Thumby Color firmware is on MP 1.24 too,
+  so this means Umby & Glow plays correctly **only on ThumbyOne**;
+  on stock TinyCircuits firmware it has been broken since the
+  Color port. Full technical write-up in [MicroPython + engine
+  slot](#micropython--engine-slot).
+- **`zlib` compatibility shim** — MicroPython 1.21+ renamed `zlib` to
+  `deflate`. We freeze a small `zlib.py` thunk into firmware so
+  legacy games using `zlib.decompress` (BadApple, in particular)
+  import cleanly without source modification.
+- **`engine_io.update_buttons()`** — new C entry point in the engine
+  for cheap button-state refresh. Lets the legacy button shim poll
+  fresh state at game-tick rate without paying for a full engine
+  tick. Submitted upstream as a small standalone PR.
+- **Lobby format-confirm prompt instead of silent wipe.** If the
+  shared FAT fails to mount on boot — typically because a previous
+  power-loss-during-write left the BPB inconsistent — the lobby
+  now shows `FS BAD / no filesystem / A=FORMAT  B=ABORT` and
+  requires a 1-second hold of A to confirm the wipe. Previously
+  this case auto-formatted silently, which hurt one user when the
+  power went off mid-game. (The LB+RB chord still wipes deliberately
+  when you actually want a clean reset.)
+- **"Legacy scale" + "Legacy FPS" rows in the MPY picker menu.**
+  Per-game settings; persist on the FAT alongside the game folder.
+- **Dual-mount of the read-only `/system` ROM** at both `/system`
+  and `/lib`, so legacy games that import from `/lib` (the original
+  Thumby's library path) resolve transparently into the same
+  firmware-baked blob — no FAT space cost.
+
+Tested against: Umby & Glow, BadApple, Gravity, TinyGolf, HnB,
+CosmicSurvivor, LyteBykes, Foxgine. Legacy games that used the
+link cable for multiplayer fall back to single-player. ADC battery-
+voltage reads (used by 3 games) still return zero — fix queued for
+a later release.
 
 ### 1.09
 
@@ -1079,6 +1173,39 @@ main()
 **`engine.reset()` → back-to-picker** — the MPY slot wraps `watchdog_reboot` via `-Wl,--wrap=watchdog_reboot` in [`thumbyone_reset_hook.c`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/thumbyone_reset_hook.c). MicroPython's `engine.reset()` and `machine.reset()` ultimately both go through `watchdog_reboot`; our wrap sets the handoff scratch to `THUMBYONE_SLOT_MPY` before calling the real function, so the chip reboots straight back into the MPY picker rather than the lobby. The **lobby-side** handoff path (`thumbyone_handoff_request_lobby`) uses `rom_reboot` instead of `watchdog_reboot`, bypassing the wrap — otherwise "Back to lobby" would be caught by the same wrap and loop back into MPY.
 
 **FatFs port** — the MPY slot runs stock upstream FatFs R0.15 (vendored in [`common/lib/fatfs/`](common/lib/fatfs/)), not MicroPython's historical ooFatFs fork. The `extmod/vfs_fat_diskio.c` shim was rewritten against the R0.15 API; the block device is [`common/fs/thumbyone_disk.c`](common/fs/thumbyone_disk.c), shared byte-for-byte with the lobby and other slots — a FAT written by MPY is guaranteed readable by NES / P8 / DOOM and vice versa.
+
+**Legacy (original-Thumby) game support** — added in 1.10. The launcher detects a legacy game heuristically (presence of a top-level `<game_dir>.py` file matching the original Thumby naming convention; native Color games use `main.py` only). When detected, before `exec`ing the game it installs a transparent compatibility layer:
+
+- **`sys.modules['machine']` hijack.** A `_MachineShim` wrapper takes over the `machine` module so `from machine import Pin, PWM, UART` resolves to our shimmed classes. Untouched names (`Timer`, `freq`, `reset`, `disable_irq`, etc.) forward to the real module via `__getattr__`. Patching `machine.Pin` directly doesn't work — `machine` is a built-in module with a read-only attr dict.
+- **Pin shim.** The class' `__new__(pin_id, ...)` dispatches:
+  - GPIO 3, 4, 5, 6, 24, 27 → `_LegacyButtonPin` wrappers around `engine_io.UP/DOWN/LEFT/RIGHT/B/A`. `.value()` calls `engine_io.update_buttons()` then returns `0 if pressed else 1`, preserving the original Thumby's active-low semantics.
+  - GPIO 28 → `_BUZZER_PIN` sentinel singleton.
+  - GPIO 0, 1, 2 → `_NoopPin` (these are the Color d-pad GPIOs but the original Thumby uses them for the UART link cable; games that try to reconfigure them as outputs would brick three of the four d-pad buttons).
+  - Anything else → real `machine.Pin` constructor.
+- **PWM shim.** `_PwmShim.__new__(pin_obj, ...)` returns the singleton `_LegacyBuzzerPwm` instance when given the buzzer-pin sentinel, otherwise the real `machine.PWM`. `_LegacyBuzzerPwm` forwards to `thumbyAudio.audio.pwm` (which is the real `PWM(Pin(23))`) and applies frequency-detected volume scaling — *tone mode* (carrier < 20 kHz) uses cube scaling for perceptual linearity across the slider, *PCM mode* (carrier ≥ 20 kHz) re-centres the waveform around 50 % duty with linearly-attenuated swing so the class-D amp doesn't rail-clip. The mode flips automatically based on the underlying PWM's current frequency, queried per-call.
+- **UART shim.** No-op `_LegacyUart` class (the Color has no link-cable pins) so `UART(0, ...)` constructors swallow without raising.
+- **`thumbyHardware` button augmentation.** Frozen `thumbyHardware` only exports `swBuzzer` (the audio PWM); it doesn't expose `swA` / `swB` / `swU` / `swD` / `swL` / `swR` button objects. Some games (TinyGolf, Bowling Days) read those module-level attributes directly. The shim attaches `_LegacyButtonPin` wrappers to `thumbyHardware` post-import.
+- **`display` shim for inline grayscale games.** A few games inline a partial copy of the Timendus grayscale library inside their own `display.py` rather than importing `thumbyGrayscale`. We sniff the file (`class Grayscale` + `_thread`) and replace `sys.modules['display']` with our `thumbyGrayscale` module so the inline copy never gets imported (its SSD1306 SPI / mem32 register pokes would crash on Color hardware).
+
+**`thumbyGrayscale` library** — Color-aware port of [Timendus's library](https://github.com/Timendus/thumby-grayscale), frozen into firmware under [`mp-thumby/ports/rp2/modules/thumbyGrayscale.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/thumbyGrayscale.py). Games construct a `Grayscale()` object that exposes the same 72×40 buffer + 72×40 shading-plane API the original Thumby firmware shipped, but the actual blit goes via our `thumby_render` module's bare-metal renderer onto Color's 128×128 RGB565 panel. The renderer translates the 2-bit per-pixel composition `(buffer_bit | shading_bit << 1)` through a fixed 4-entry RGB565 palette baked into [`thumby_render.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/thumby_render.py): `BLACK 0x0000 / WHITE 0xFFFF / DARKGRAY 0x4208 (~33 % luma) / LIGHTGRAY 0x8410 (~66 % luma)`. The original's GPU-thread sub-frame pacing (used to fake greyscale on the SSD1306) is replaced by a single full-frame blit at the configured FPS (default 30 Hz, matching the original's effective rate). Games that supply only a buffer (no shading plane) hit a 2-entry mono palette via the same code path.
+
+**`thumby_render` module** — frozen helper that owns a 128×128 RGB565 shadow texture, registers it as `engine_draw.set_background()`, and exposes viper-compiled `present_mono()` / `present_gray()` kernels that scale the legacy 72×40 mono / grey framebuffers up to fill the colour screen. Per-game 1× / nearest-neighbour scale + on-screen FPS overlay are read from `/.legacy_scale` and `/.legacy_fps` on the FAT, set from the picker's "LEGACY SCALE" / "LEGACY FPS" menu rows.
+
+**`engine_audio.update_buttons()`** — small new C function in the engine for refreshing the button state machine without paying for a full engine `tick()`. Lets the legacy button shim poll fresh state at game-tick rate. Submitted upstream as a standalone PR (`mp-thumby` branch `engine-update-buttons-pr`).
+
+**`zlib` compatibility** — MicroPython 1.21+ renamed `zlib` to `deflate`. We freeze a small `zlib.py` wrapper into firmware ([`mp-thumby/ports/rp2/modules/zlib.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/zlib.py)) — re-exports `decompress` / `compress` over `deflate.DeflateIO`. Required for BadApple's per-frame zlib-compressed audio block decoder.
+
+**MicroPython viper `STORE_ATTR` reverted to MP 1.19.1 behaviour** — load-bearing for Umby & Glow. Upstream commit [`9714a0e`](https://github.com/micropython/micropython/commit/9714a0e) (Jim Mussared, Jul 2022, *"py/emitnative: Fix STORE_ATTR viper code-gen when value is not a pyobj"*) inserted an `MP_F_CONVERT_NATIVE_TO_OBJ` call into `emit_native_store_attr` so viper-typed `int` values stored into Python attributes get boxed via `mp_obj_new_int(val)` before reaching `mp_store_attr`. That's a legitimate type-safety fix from upstream's perspective — the old code passed the raw 32-bit word straight through to `mp_store_attr` as `mp_obj_t`, which is type confusion if the caller doesn't construct a valid tagged-pointer bit pattern. **But Umby & Glow's viper-compiled physics tick code deliberately exploits exactly that:** the upstream game writes attribute stores like
+
+  ```python
+  self._y = (yf + (yv >> 8)) << 1 | 1
+  ```
+
+  The trailing `<< 1 | 1` is a hand-rolled `MP_OBJ_NEW_SMALL_INT` — under `MICROPY_OBJ_REPR_A`, a small int with value `n` is stored as the pointer `(n << 1) | 1` (low bit = type tag). On MP 1.19.1 (the original Thumby firmware) that bit pattern goes straight through `mp_store_attr` as `mp_obj_t`, the slot holds a valid tagged small int, and the next read recovers `n`. **No allocation per tick** — the trick was the author's per-tick alloc-free attribute store. On MP 1.20+ the boxing call wraps the raw `(n << 1) | 1` literal as a fresh Python int with value `(n << 1) | 1` — double-encoded — so the next read returns `(n << 1) | 1` instead of `n`, and within ~6 game ticks the player's `_y` blows up exponentially and they die "fell into the abyss".
+
+  We revert the Mussared commit in our `mp-thumby` fork (`py/emitnative.c::emit_native_store_attr` is back to the 1.19.1 form: pop, assert, store). The function gains a multi-line comment block calling out the constraint that drops out: **viper code that stores into attributes must use Python objects or pre-tagged small ints, never raw native ints.** Storing an even native `int` would now drive `10` (or whatever) through `mp_store_attr` as `mp_obj_t` — low bit 0, interpreted as a heap pointer to address `0xa`, GC corruption follows. Our launcher Python modules (`thumbyGraphics.py`, `thumby_render.py`, `thumbySaves.py`, `thumbyGrayscale.py`) and the engine's viper code paths are audited to avoid that pattern; new viper code added to the slot needs the same audit.
+
+  This is a deliberate one-commit divergence from upstream. It applies *only* to the MPY slot in ThumbyOne — the engine's `engine`, `engine-1.23.0`, `engine-1.24.0` branches that stock TinyCircuits firmware tracks all carry the upstream fix and break Umby & Glow accordingly. The reasoning, the original commit hash, and the "if we ever rebase" note are kept inline in the source comment so a future maintainer doesn't accidentally paper over the divergence.
 
 **SRAM discipline:**
 

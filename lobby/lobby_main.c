@@ -751,7 +751,7 @@ static void draw_thin_bar(int x, int y, int w, int h,
 }
 
 #ifndef THUMBYONE_FW_VERSION
-#define THUMBYONE_FW_VERSION "1.09"
+#define THUMBYONE_FW_VERSION "1.10"
 #endif
 
 static void render_lobby_menu(int cursor) {
@@ -1103,23 +1103,60 @@ int main(void) {
         }
     }
 
-    /* Mount the shared FAT, formatting it on first boot if
-     * needed. Lobby owns the canonical shape — slots only ever
-     * mount. If the auto-format path runs (virgin flash, or just
-     * after the LB+RB wipe chord + reboot) this takes ~1 s and
-     * the user sees the "formatting" splash. */
+    /* Mount the shared FAT. Lobby owns the canonical shape — slots
+     * only ever mount.
+     *
+     * Auto-format ONLY if the user explicitly requested it via the
+     * LB+RB wipe chord (which already runs erase_shared_fat() above
+     * and reboots; on re-entry the recovery_wipe_pending flag is
+     * cleared so we don't loop). For a NORMAL boot that finds a
+     * corrupt FAT, we now SHOW A PROMPT instead of silently wiping
+     * — power-loss-during-write can leave the BPB inconsistent and
+     * silently formatting deletes the user's games. The prompt
+     * surfaces the loss as a recoverable choice. */
     {
         FRESULT r = thumbyone_fs_mount(&g_fs);
         if (r == FR_NO_FILESYSTEM) {
-            draw_text_splash("THUMBY", "ONE", "formatting", "shared FAT...", COL_TITLE);
-            r = thumbyone_fs_format(&g_fs, g_workarea, sizeof(g_workarea));
+            /* Could be (a) virgin flash on first boot — needs format;
+             * (b) corruption from power-loss — user should be told.
+             * Without a way to distinguish them with certainty, ask. */
+            draw_text_splash("FS", "BAD", "no filesystem", "A=FORMAT  B=ABORT", COL_ACTION);
+            /* Wait for A or B. Watchdog'd MENU long-hold still
+             * returns to the wipe path if user wants to fully reset. */
+            for (;;) {
+                if (btn_a_pressed()) {
+                    /* Hold A for 1 s to confirm. */
+                    absolute_time_t until = make_timeout_time_ms(1000);
+                    bool held = true;
+                    while (held && !time_reached(until)) {
+                        if (!btn_a_pressed()) { held = false; break; }
+                        sleep_ms(10);
+                    }
+                    if (held) {
+                        draw_text_splash("THUMBY", "ONE", "formatting",
+                                         "shared FAT...", COL_TITLE);
+                        r = thumbyone_fs_format(&g_fs, g_workarea, sizeof(g_workarea));
+                        break;
+                    }
+                }
+                if (btn_b_pressed()) {
+                    /* Abort: leave r as FR_NO_FILESYSTEM and fall
+                     * through to the error splash + extended wait so
+                     * the user can power-cycle and try recovery
+                     * (e.g. read flash via picotool). */
+                    break;
+                }
+                sleep_ms(20);
+            }
         }
         if (r != FR_OK) {
-            /* Fatal: can't mount and can't format. Show something
-             * user-actionable rather than a blank screen — they
-             * can still use DOOM which doesn't need the shared FS. */
-            draw_text_splash("FS", "ERR", "mount failed", "try LB+RB wipe", COL_ACTION);
-            sleep_ms(3000);
+            /* Fatal: can't mount, format declined or failed. Show
+             * something user-actionable rather than a blank screen —
+             * they can still use DOOM which doesn't need the shared
+             * FS, and LB+RB wipe is always available. */
+            draw_text_splash("FS", "ERR", "mount failed",
+                             "LB+RB to wipe", COL_ACTION);
+            sleep_ms(5000);
         }
     }
 
