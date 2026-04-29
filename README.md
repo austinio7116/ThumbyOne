@@ -404,120 +404,54 @@ See the [1.10 changelog](#110) for the supported feature set and known caveats; 
 
 ### 1.10
 
-Original (monochrome) Thumby games run inside the MPY slot, with audio
-that respects the lobby slider across both tone-style legacy games
-(Umby & Glow, CosmicSurvivor, Gravity, TinyGolf, …) and PCM-streaming
-ones (BadApple). No game code is modified — everything is a launcher-
-side shim or a deliberate firmware-level revert.
+Original (monochrome) Thumby games run inside the MicroPython slot,
+the lobby volume slider applies to legacy game audio for the first
+time, and a new bare-metal render path means classic games run at
+full speed instead of the laggy rate they hit going through the
+standard engine pipeline.
 
-- **Original Thumby games supported.** Classic 72×40 monochrome
-  Thumby games launch from the same hero picker as Color games, with
-  configurable per-game scale (1×, NN, smooth) and an optional FPS
-  overlay. A launcher-side compatibility layer transparently
-  redirects:
-  - **Buttons** — the original Thumby's GPIO 3/4/5/6 (d-pad), 24 (B),
-    27 (A) get aliased onto Color's `engine_io` button state. Active-
-    low semantics are preserved so games that read `Pin(N).value()`
-    expecting `0 == pressed` get the right thing.
-  - **Buzzer audio** — `PWM(Pin(28))` (the original Thumby buzzer pin,
-    unconnected on Color) is rerouted to the engine's pin-23 PWM via
-    a `_LegacyBuzzerPwm` shim. The shim auto-detects two regimes:
-    *tone mode* (PWM carrier in the audible band, used by
-    `thumby.audio.set/play` and direct-PWM tone games) gets cube-
-    scaled volume so the slider has a perceptually-linear response;
-    *PCM mode* (carrier ≥ 20 kHz, used by BadApple's 4-bit DAC at
-    8 kHz) gets a linearly-attenuated swing centred on 50 % duty so
-    the class-D amp stays inside its linear region instead of
-    railing.
-  - **Hardware-conflict pins** — original Thumby's UART link cable
-    pins (GPIO 0 / 1 / 2) collide with Color's d-pad on the same
-    GPIOs. Games that try to reconfigure them as outputs (Umby &
-    Glow's `comms.py`, RocketCup's link code) hit a no-op `_NoopPin`
-    so the d-pad keeps working.
-  - **`UART(0)`** — non-functional on Color (no link-cable pins) but
-    silently swallowed so multiplayer-link constructors don't crash;
-    single-player still works.
-- **Grayscale library — both code paths supported.** A Color-aware
-  port of Timendus's [`thumby-grayscale`](https://github.com/Timendus/thumby-grayscale)
-  is frozen into firmware. Two ways legacy games reach it, both
-  transparent:
-  - **Import path** — games that do `import thumbyGrayscale` (the
-    library landed in stock firmware; LyteBykes, Foxgine, RocketCup,
-    later versions of various indie games) pick up the frozen
-    Color port directly.
-  - **Inline-display path** — games that predate the standalone
-    library and bundled their own copy inside `<game>/display.py`
-    (Umby & Glow ships its grayscale this way, with `class Grayscale`
-    + `_thread` defined in the game folder). The launcher sniffs
-    `display.py` for those two signatures and replaces
-    `sys.modules['display']` with our `thumbyGrayscale` module so
-    the bundled copy never gets imported — its SSD1306 SPI / mem32
-    register pokes would crash on Color hardware. The game ends up
-    talking to the same renderer as the import-path games.
+- **Original Thumby games run.** Drop a classic 72×40 monochrome
+  Thumby game folder into `/games/<name>/` and it appears on the
+  same hero picker as Color games. Buttons, audio, saves, and
+  multiplayer-link constructors all work transparently — no game
+  source modifications.
+- **Big performance jump for legacy games.** A new bare-metal render
+  path blits the legacy 72×40 framebuffer straight onto Color's
+  128×128 panel via viper kernels, bypassing the engine's general-
+  purpose sprite / draw pipeline. Combined with a fast button-poll
+  hook that keeps legacy games' tight read-button loops responsive
+  without paying for a full engine tick on every read, classic
+  games now run at full speed where they previously felt sluggish.
+- **Greyscale games supported** — both common variants. Games that
+  `import thumbyGrayscale` (Timendus's library) and games that
+  bundle an inline copy of the same library inside their own
+  `display.py` both end up at the same Color-aware renderer. Umby
+  & Glow uses the inline-display variant; LyteBykes, Foxgine, and
+  RocketCup use the import variant.
+- **Press MENU during a legacy game to cycle 5 scale presets** —
+  `1.0× / 1.5× / 1.75× / 2.0× / 2.5×`. The default scale per game
+  is set from the picker's *Legacy scale* row before launch. The
+  5-second MENU hold still returns to the lobby.
+- **Lobby volume slider applies to legacy game audio** — both
+  tone-style games (Umby & Glow, Gravity, TinyGolf, …) and the
+  PCM-streaming kind (BadApple) now respect the slider end-to-end.
+  Native Color games are unchanged.
+- **Per-game *Legacy scale* and *Legacy FPS* rows** in the MPY
+  picker menu — set the default scale preset for each legacy game
+  and toggle an on-screen FPS counter, persisted on the FAT.
 
-  In both cases the API is identical to the original: a 72×40 1-bpp
-  buffer plus an optional 72×40 1-bpp shading plane. Each output
-  pixel is composed as `(buffer_bit | shading_bit << 1)` and looked
-  up in a fixed 4-entry RGB565 palette (`BLACK / DARKGRAY ~33% /
-  LIGHTGRAY ~66% / WHITE`). Mono games (no shading plane) hit the
-  same code path with a 2-entry palette. The library defaults
-  `frameRate = 30` to match the original's effective rate — the
-  original's GPU thread fakes shading via rapid SPI sub-frame
-  pacing on the SSD1306; we collapse that to a single full-frame
-  blit at 30 Hz.
+Note: Umby & Glow plays correctly **only on ThumbyOne**. The game
+relies on a MicroPython viper detail that was changed upstream
+between MP 1.19 (the original Thumby firmware) and MP 1.20+ (which
+stock Thumby Color uses); we revert that one upstream commit in our
+mp-thumby fork specifically so this game works. On stock TinyCircuits
+firmware it's been broken since the Color launch.
 
-- **In-game MENU tap cycles 5 scale presets** — quick MENU tap
-  during a legacy game advances to the next of `1.0× / 1.5× /
-  1.75× / 2.0× / 2.5×`. The default per-game preset is still set
-  from the picker's *Legacy scale* row (persisted in
-  `/.legacy_scale`); the in-game cycle is a per-session override
-  that doesn't persist, so launching the game again loads the
-  picker default. The 5-second MENU hold still bails to the lobby.
-- **MicroPython viper `STORE_ATTR` reverted to MP 1.19.1 behaviour.**
-  Umby & Glow uses a hand-rolled small-int tag idiom — `expr << 1 |
-  1` — to skip per-tick `mp_obj_new_int` heap allocation in viper-
-  compiled physics functions. The trick worked on MP 1.19.1 (the
-  original Thumby firmware) but upstream commit `9714a0e` (Jul 2022)
-  added a `MP_F_CONVERT_NATIVE_TO_OBJ` boxing call to viper's
-  `STORE_ATTR` codegen, which double-encoded the tagged value and
-  caused exponential numerical blow-up within a few game ticks. We
-  revert that one commit in our `mp-thumby` fork so the trick stores
-  the raw 32-bit word straight through to `mp_store_attr` again,
-  matching MP 1.19.1. Caveat documented inline: viper attribute
-  stores must use Python objects or pre-tagged small ints, never
-  raw native ints. Stock Thumby Color firmware is on MP 1.24 too,
-  so this means Umby & Glow plays correctly **only on ThumbyOne**;
-  on stock TinyCircuits firmware it has been broken since the
-  Color port. Full technical write-up in [MicroPython + engine
-  slot](#micropython--engine-slot).
-- **`zlib` compatibility shim** — MicroPython 1.21+ renamed `zlib` to
-  `deflate`. We freeze a small `zlib.py` thunk into firmware so
-  legacy games using `zlib.decompress` (BadApple, in particular)
-  import cleanly without source modification.
-- **`engine_io.update_buttons()`** — new C entry point in the engine
-  for cheap button-state refresh. Lets the legacy button shim poll
-  fresh state at game-tick rate without paying for a full engine
-  tick. Submitted upstream as a small standalone PR.
-- **Lobby format-confirm prompt instead of silent wipe.** If the
-  shared FAT fails to mount on boot — typically because a previous
-  power-loss-during-write left the BPB inconsistent — the lobby
-  now shows `FS BAD / no filesystem / A=FORMAT  B=ABORT` and
-  requires a 1-second hold of A to confirm the wipe. Previously
-  this case auto-formatted silently, which hurt one user when the
-  power went off mid-game. (The LB+RB chord still wipes deliberately
-  when you actually want a clean reset.)
-- **"Legacy scale" + "Legacy FPS" rows in the MPY picker menu.**
-  Per-game settings; persist on the FAT alongside the game folder.
-- **Dual-mount of the read-only `/system` ROM** at both `/system`
-  and `/lib`, so legacy games that import from `/lib` (the original
-  Thumby's library path) resolve transparently into the same
-  firmware-baked blob — no FAT space cost.
-
-Tested against: Umby & Glow, BadApple, Gravity, TinyGolf, HnB,
-CosmicSurvivor, LyteBykes, Foxgine. Legacy games that used the
-link cable for multiplayer fall back to single-player. ADC battery-
-voltage reads (used by 3 games) still return zero — fix queued for
-a later release.
+Technical detail — the launcher's pin / PWM / UART shims, the audio
+path's tone-vs-PCM mode detection, the grayscale dual-path import
+sniff, the `zlib` compat shim for MP 1.21+, and the deliberate
+viper revert that makes Umby & Glow's small-int tag idiom work — is
+in [MicroPython + engine slot](#micropython--engine-slot).
 
 ### 1.09
 
@@ -1193,7 +1127,7 @@ main()
 
 **The C picker** ([`common/picker/picker.c`](common/picker/picker.c)) runs **before** `mp_init()`. It mounts the shared FAT directly via FatFs (bypassing MicroPython's VFS which isn't up yet), scans `/games/<name>/main.py`, renders a hero view with icon + description, handles d-pad navigation + favourites + sort + menu overlay. On A-press it writes the chosen path to `/.active_game`, unmounts, tears down the LCD + SPI + DMA, and returns to `main()`. Zero Python runtime cost for selection — the first Python thing you see is the game itself.
 
-**ROM-backed `/system/` VFS**: the engine's `filesystem/system/` tree (fonts, splashes, launcher assets, ~376 KB of 51 files) is packed into the firmware image at build time by [`tools/pack_system_rom.py`](tools/pack_system_rom.py) as a single 242 KB byte blob + 51-entry directory table. The C module in [`mp-thumby/ports/rp2/thumbyone_rom_vfs.c`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/thumbyone_rom_vfs.c) implements the MicroPython VFS protocol against that blob — `open()`, `stat()`, `ilistdir()`, stream read / seek / tell / close. `_boot_fat.py` mounts it at `/system` after the shared-FAT root mount, so `open('/system/assets/foo.bmp')` resolves transparently without consuming any FAT space.
+**ROM-backed `/system/` VFS**: the engine's `filesystem/system/` tree (fonts, splashes, launcher assets, ~376 KB of 51 files) is packed into the firmware image at build time by [`tools/pack_system_rom.py`](tools/pack_system_rom.py) as a single 242 KB byte blob + 51-entry directory table. The C module in [`mp-thumby/ports/rp2/thumbyone_rom_vfs.c`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/thumbyone_rom_vfs.c) implements the MicroPython VFS protocol against that blob — `open()`, `stat()`, `ilistdir()`, stream read / seek / tell / close. `_boot_fat.py` mounts it at `/system` after the shared-FAT root mount, so `open('/system/assets/foo.bmp')` resolves transparently without consuming any FAT space. Added in 1.10: the same blob is **also mounted at `/lib`** with a `/lib`-prefixed path lookup, so legacy games that import from the original Thumby's library path (e.g. `from /lib/thumbyGrayscale import Grayscale` patterns, or any open(`/lib/...`) lookup) resolve into the same firmware-baked content with no FAT space cost. The `ThumbyOneRomVFS` C class accepts an optional path-prefix argument that gets prepended to entry lookups, so we mount the same underlying blob twice with different visible roots.
 
 **Flash resource scratch override**: the Tiny Game Engine stores non-in-RAM textures into "flash scratch" via `hardware_flash`. The engine's default scratch region is at 1 MB from chip base — which in ThumbyOne is the **NES partition**. Left as-is, `TextureResource("foo.bmp")` would erase NES firmware, leading to truly glorious sprite corruption. The CMake passes `-DFLASH_RESOURCE_SPACE_BASE=0x560000u -DFLASH_RESOURCE_SPACE_SIZE=0xC0000u`, which points scratch at the upper 768 KB of the MPY partition; the engine source is `#ifndef`-guarded so the override takes effect.
 
@@ -1234,7 +1168,7 @@ main()
 
   An on-screen FPS overlay is gated by `/.legacy_fps == "1"` (set from the picker's *Legacy FPS* row) and renders into the 128×128 shadow with a tiny embedded 4×6 digit font, top-right corner.
 
-**`engine_audio.update_buttons()`** — small new C function in the engine for refreshing the button state machine without paying for a full engine `tick()`. Lets the legacy button shim poll fresh state at game-tick rate. Submitted upstream as a standalone PR (`mp-thumby` branch `engine-update-buttons-pr`).
+**`engine_io.update_buttons()`** — small new C function in the engine for refreshing the button state machine without paying for a full engine `tick()`. Lets the legacy button shim poll fresh state from inside the game's own loop, which is the difference between legacy games being responsive and not — classic Thumby games drive their own ticking and never call `engine.tick()`, so without this entry point the shim couldn't refresh button state at all without dragging the entire engine pipeline through every `Pin.value()` call. Submitted upstream as a standalone PR.
 
 **`zlib` compatibility** — MicroPython 1.21+ renamed `zlib` to `deflate`. We freeze a small `zlib.py` wrapper into firmware ([`mp-thumby/ports/rp2/modules/zlib.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/zlib.py)) — re-exports `decompress` / `compress` over `deflate.DeflateIO`. Required for BadApple's per-frame zlib-compressed audio block decoder.
 
