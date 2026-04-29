@@ -374,6 +374,7 @@ MicroPython with the Tiny Game Engine C module baked in, running a custom C pick
 | A | Launch the selected game |
 | B | Toggle favourite (★) for the highlighted game |
 | MENU (in picker) | Open info overlay (battery, disk, sort, back to lobby) |
+| MENU (tap, in legacy Thumby game) | Cycle scale preset (1.0× → 1.5× → 1.75× → 2.0× → 2.5× → 1.0×) |
 | MENU (held ~5 s in-game) | Reboot to the lobby (no splash; game state is lost) |
 
 **Game structure** in `/games/<name>/`:
@@ -390,7 +391,12 @@ MicroPython with the Tiny Game Engine C module baked in, running a custom C pick
 
 The icon + description are optional (picker falls back to the directory name and a placeholder tile), but having them makes your game look at home next to everything else on the picker.
 
-**Original (monochrome) Thumby games — supported as of 1.10.** Drop a classic 72×40 mono Thumby game folder into `/games/<name>/` and it appears on the same picker, scaled to the colour screen with the original gameplay intact. Buttons, audio, save format, and Timendus's `thumbyGrayscale` library are all shimmed transparently — no game code modification needed. See the [1.10 changelog](#110) for the supported feature set and known caveats; the technical write-up of how the shim works (and what we had to revert in MicroPython to make Umby & Glow's viper-tag trick work) is in [MicroPython + engine slot](#micropython--engine-slot).
+**Original (monochrome) Thumby games — supported as of 1.10.** Drop a classic 72×40 mono Thumby game folder into `/games/<name>/` and it appears on the same picker, scaled to the colour screen with the original gameplay intact. Buttons, audio, save format, and Timendus's `thumbyGrayscale` library are all shimmed transparently — no game code modification needed.
+
+- **Greyscale games work too**, both flavours: games that `import thumbyGrayscale` (LyteBykes, Foxgine, RocketCup), and older games that bundled an inline copy of the library inside their own `display.py` (Umby & Glow's display.py is the canonical example). Both paths route through the same Color-aware renderer; the inline-copy case is detected by sniffing `display.py` for the Timendus library's `class Grayscale` + `_thread` signatures.
+- **Tap MENU during a legacy game to cycle through scale presets** — `1.0× / 1.5× / 1.75× / 2.0× / 2.5×`. The default is set per-game from the picker's *Legacy scale* row before launch; the in-game tap is a quick override that doesn't persist (so the next launch uses the picker default again). The 5-second MENU hold still returns to the lobby.
+
+See the [1.10 changelog](#110) for the supported feature set and known caveats; the technical write-up of how the shim works (and what we had to revert in MicroPython to make Umby & Glow's viper-tag trick work) is in [MicroPython + engine slot](#micropython--engine-slot).
 
 ---
 
@@ -431,17 +437,42 @@ side shim or a deliberate firmware-level revert.
   - **`UART(0)`** — non-functional on Color (no link-cable pins) but
     silently swallowed so multiplayer-link constructors don't crash;
     single-player still works.
-- **Grayscale library** — Color-aware port of Timendus's
-  [`thumby-grayscale`](https://github.com/Timendus/thumby-grayscale)
-  is frozen into firmware. Games that import `thumbyGrayscale`
-  (Umby & Glow, LyteBykes, Foxgine, RocketCup, etc.) get the same
-  4-shade 72×40 buffer + shading-plane API, blitted to the colour
-  screen via the bare-metal shadow-framebuffer path with a fixed
-  4-entry RGB565 palette (black / dark grey / light grey / white).
-  The library defaults `frameRate = 30` to match the original's
-  effective rate (the original's GPU thread fakes shading via
-  rapid SPI sub-frame pacing on the SSD1306; we collapse that to
-  a single full-frame blit at 30 Hz).
+- **Grayscale library — both code paths supported.** A Color-aware
+  port of Timendus's [`thumby-grayscale`](https://github.com/Timendus/thumby-grayscale)
+  is frozen into firmware. Two ways legacy games reach it, both
+  transparent:
+  - **Import path** — games that do `import thumbyGrayscale` (the
+    library landed in stock firmware; LyteBykes, Foxgine, RocketCup,
+    later versions of various indie games) pick up the frozen
+    Color port directly.
+  - **Inline-display path** — games that predate the standalone
+    library and bundled their own copy inside `<game>/display.py`
+    (Umby & Glow ships its grayscale this way, with `class Grayscale`
+    + `_thread` defined in the game folder). The launcher sniffs
+    `display.py` for those two signatures and replaces
+    `sys.modules['display']` with our `thumbyGrayscale` module so
+    the bundled copy never gets imported — its SSD1306 SPI / mem32
+    register pokes would crash on Color hardware. The game ends up
+    talking to the same renderer as the import-path games.
+
+  In both cases the API is identical to the original: a 72×40 1-bpp
+  buffer plus an optional 72×40 1-bpp shading plane. Each output
+  pixel is composed as `(buffer_bit | shading_bit << 1)` and looked
+  up in a fixed 4-entry RGB565 palette (`BLACK / DARKGRAY ~33% /
+  LIGHTGRAY ~66% / WHITE`). Mono games (no shading plane) hit the
+  same code path with a 2-entry palette. The library defaults
+  `frameRate = 30` to match the original's effective rate — the
+  original's GPU thread fakes shading via rapid SPI sub-frame
+  pacing on the SSD1306; we collapse that to a single full-frame
+  blit at 30 Hz.
+
+- **In-game MENU tap cycles 5 scale presets** — quick MENU tap
+  during a legacy game advances to the next of `1.0× / 1.5× /
+  1.75× / 2.0× / 2.5×`. The default per-game preset is still set
+  from the picker's *Legacy scale* row (persisted in
+  `/.legacy_scale`); the in-game cycle is a per-session override
+  that doesn't persist, so launching the game again loads the
+  picker default. The 5-second MENU hold still bails to the lobby.
 - **MicroPython viper `STORE_ATTR` reverted to MP 1.19.1 behaviour.**
   Umby & Glow uses a hand-rolled small-int tag idiom — `expr << 1 |
   1` — to skip per-tick `mp_obj_new_int` heap allocation in viper-
@@ -1187,9 +1218,21 @@ main()
 - **`thumbyHardware` button augmentation.** Frozen `thumbyHardware` only exports `swBuzzer` (the audio PWM); it doesn't expose `swA` / `swB` / `swU` / `swD` / `swL` / `swR` button objects. Some games (TinyGolf, Bowling Days) read those module-level attributes directly. The shim attaches `_LegacyButtonPin` wrappers to `thumbyHardware` post-import.
 - **`display` shim for inline grayscale games.** A few games inline a partial copy of the Timendus grayscale library inside their own `display.py` rather than importing `thumbyGrayscale`. We sniff the file (`class Grayscale` + `_thread`) and replace `sys.modules['display']` with our `thumbyGrayscale` module so the inline copy never gets imported (its SSD1306 SPI / mem32 register pokes would crash on Color hardware).
 
-**`thumbyGrayscale` library** — Color-aware port of [Timendus's library](https://github.com/Timendus/thumby-grayscale), frozen into firmware under [`mp-thumby/ports/rp2/modules/thumbyGrayscale.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/thumbyGrayscale.py). Games construct a `Grayscale()` object that exposes the same 72×40 buffer + 72×40 shading-plane API the original Thumby firmware shipped, but the actual blit goes via our `thumby_render` module's bare-metal renderer onto Color's 128×128 RGB565 panel. The renderer translates the 2-bit per-pixel composition `(buffer_bit | shading_bit << 1)` through a fixed 4-entry RGB565 palette baked into [`thumby_render.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/thumby_render.py): `BLACK 0x0000 / WHITE 0xFFFF / DARKGRAY 0x4208 (~33 % luma) / LIGHTGRAY 0x8410 (~66 % luma)`. The original's GPU-thread sub-frame pacing (used to fake greyscale on the SSD1306) is replaced by a single full-frame blit at the configured FPS (default 30 Hz, matching the original's effective rate). Games that supply only a buffer (no shading plane) hit a 2-entry mono palette via the same code path.
+**`thumbyGrayscale` library — two entry paths, one renderer.** Color-aware port of [Timendus's library](https://github.com/Timendus/thumby-grayscale), frozen into firmware under [`mp-thumby/ports/rp2/modules/thumbyGrayscale.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/thumbyGrayscale.py). Two distinct legacy-game patterns reach it; both transparent:
 
-**`thumby_render` module** — frozen helper that owns a 128×128 RGB565 shadow texture, registers it as `engine_draw.set_background()`, and exposes viper-compiled `present_mono()` / `present_gray()` kernels that scale the legacy 72×40 mono / grey framebuffers up to fill the colour screen. Per-game 1× / nearest-neighbour scale + on-screen FPS overlay are read from `/.legacy_scale` and `/.legacy_fps` on the FAT, set from the picker's "LEGACY SCALE" / "LEGACY FPS" menu rows.
+  1. **Import path.** Games that do `import thumbyGrayscale` (newer indie titles, anything published after Timendus shipped the library as a standalone module — LyteBykes, Foxgine, RocketCup, etc.) pick up our frozen port directly. No special handling needed; standard frozen-module resolution.
+  2. **Inline-display path.** Older games that predate the standalone library bundled their own copy of `class Grayscale` (often a slightly modified or pre-release version) inside the game folder's `display.py`. The canonical example is Umby & Glow — its `display.py` defines `class Grayscale` plus the `_thread`-based GPU pacing loop, then the rest of the game does `from display import *`. Two problems on Color: (a) those bundled copies poke SSD1306-specific SPI registers and `mem32[0xD0000000+0x01C]` PIO addresses that crash the device, and (b) we want them to share our colour renderer anyway. The launcher solves both with a `sys.modules` interception: before the game's first import resolves, we read `<game_dir>/display.py`, scan for the byte sequences `b"class Grayscale"` and `b"_thread"`, and if both are present we install `sys.modules['display'] = thumbyGrayscale`. Subsequent `import display` / `from display import Grayscale` then resolve to the frozen Color port, the bundled `display.py` is never parsed, and the game ends up talking to the same `Grayscale()` API surface as the import-path games. False-positive risk is low — the two-marker check is specific to the Timendus library + its variants.
+
+  Both paths construct a `Grayscale()` object exposing the same 72×40 buffer + 72×40 shading-plane API the original Thumby firmware shipped. The actual blit goes via our `thumby_render` module onto Color's 128×128 RGB565 panel. Each output pixel is composed as `(buffer_bit | shading_bit << 1)` and looked up in a fixed 4-entry RGB565 palette baked into [`thumby_render.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/thumby_render.py): `BLACK 0x0000 / WHITE 0xFFFF / DARKGRAY 0x4208 (~33 % luma) / LIGHTGRAY 0x8410 (~66 % luma)`. The original's GPU-thread sub-frame pacing (rapid SPI re-clocking on the SSD1306 to fake the four levels) is replaced by a single full-frame blit at the configured FPS (default 30 Hz, matching the original's effective rate). Games that supply only a buffer (no shading plane) hit a 2-entry mono palette via the same code path. The 4-entry palette is currently hardcoded — a per-game palette override would be a small addition (one bytearray per game folder + lookup at `Grayscale()` construct time) but no game has needed it yet.
+
+**`thumby_render` module** — frozen helper at [`mp-thumby/ports/rp2/modules/thumby_render.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/thumby_render.py). Owns a 128×128 RGB565 shadow texture, registers it as `engine_draw.set_background()`, and exposes viper-compiled `present_mono()` / `present_gray()` kernels that scale the legacy 72×40 mono / grey framebuffers up to fill the colour screen. Two render paths per kernel:
+
+  - **1× pixel-perfect** when the active scale is 1.0 — direct byte-by-byte blit, centred 72×40 in 128×128 with a 28-px / 44-px black border.
+  - **Nearest-neighbour scaled** for 1.5× / 1.75× / 2.0× / 2.5× — two precomputed bytearray LUTs (one per axis, ASCII source-coordinate per output pixel) feed the viper kernel so the per-pixel hot path pays zero divide cost. LUTs are rebuilt only when the active scale changes.
+
+  Active scale comes from `/.legacy_scale` (ASCII "0".."4" → preset index into `(1.0, 1.5, 1.75, 2.0, 2.5)`) on first import. After that the per-frame `present_*()` entry points poll `engine_io.MENU.is_pressed` for a quick tap (rising-edge), and each tap advances `_scale_idx = (_scale_idx + 1) % 5` and rebuilds the LUTs in place. The change does **not** write back to `/.legacy_scale` — the picker's *Legacy scale* row remains the persisted source of truth, so re-launching the game starts again at the user's picker-set default. The 5-second `menu_watchdog` hold-to-lobby (`common/picker/menu_watchdog.c`) takes precedence over taps; we deliberately use `is_pressed` (level) rather than `is_just_pressed` (edge) for the tap detector because legacy games may absorb the edge into their own button tick before our render path sees it.
+
+  An on-screen FPS overlay is gated by `/.legacy_fps == "1"` (set from the picker's *Legacy FPS* row) and renders into the 128×128 shadow with a tiny embedded 4×6 digit font, top-right corner.
 
 **`engine_audio.update_buttons()`** — small new C function in the engine for refreshing the button state machine without paying for a full engine `tick()`. Lets the legacy button shim poll fresh state at game-tick rate. Submitted upstream as a standalone PR (`mp-thumby` branch `engine-update-buttons-pr`).
 
