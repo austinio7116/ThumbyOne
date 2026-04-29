@@ -750,6 +750,11 @@ static void draw_thin_bar(int x, int y, int w, int h,
             g_fb[yy * 128 + xx] = fg;
 }
 
+/* Single source of truth is THUMBYONE_FW_VERSION in the parent
+ * ThumbyOne CMakeLists.txt; the inline fallback below is only used
+ * when the lobby is built outside the unified ThumbyOne build (rare
+ * but lets standalone-lobby compiles still produce a sensible
+ * About-row string). */
 #ifndef THUMBYONE_FW_VERSION
 #define THUMBYONE_FW_VERSION "1.10"
 #endif

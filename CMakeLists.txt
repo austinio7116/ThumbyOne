@@ -40,6 +40,20 @@ pico_sdk_init()
 # build, not a standalone build of any individual project.
 set(THUMBYONE_UNIFIED_BUILD ON)
 
+# ----- ThumbyOne firmware version --------------------------------------
+# Single source of truth — bumping this here updates every menu in
+# every slot (lobby About row, shared content-picker fw row, NES
+# in-game About line). Subprojects that build standalone (NES on
+# its own, MPY on its own) keep an inline #define fallback in their
+# .c source so they still compile sensibly outside the unified
+# build, but inside the ThumbyOne build this CMake variable wins.
+#
+# DOOM is deliberately excluded — it tracks the ThumbyDOOM port's
+# own versioning ("ThumbyDOOM v1.2"), not ThumbyOne's release
+# cadence.
+set(THUMBYONE_FW_VERSION "1.10")
+add_compile_definitions(THUMBYONE_FW_VERSION="${THUMBYONE_FW_VERSION}")
+
 # ----- Slot selection --------------------------------------------------
 # (Only NES is wired in step C1. P8 / DOOM / MPY follow once their
 # subproject CMake hooks are in place.)
@@ -315,6 +329,7 @@ if (THUMBYONE_WITH_MPY)
             -DTHUMBYONE_SLOT_MODE=mpy
             -DTHUMBYONE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
             -DCMAKE_BUILD_TYPE=${CMAKE_BUILD_TYPE}
+            -DTHUMBYONE_FW_VERSION=${THUMBYONE_FW_VERSION}
             ${MPY_WITH_MD_FLAG}
         BUILD_BYPRODUCTS ${MPY_UF2}
         INSTALL_COMMAND ""

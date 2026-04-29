@@ -43,9 +43,11 @@
 #include "thumbyone_handoff.h"
 
 /* --- build-time firmware identity -------------------------------- */
-/* THUMBYONE_FW_VERSION is optionally set by the parent CMake via
- * -DTHUMBYONE_FW_VERSION=\"abc1234\". Fallback is a short marker so
- * the info strip always has something to show. */
+/* Single source of truth is THUMBYONE_FW_VERSION in the parent
+ * ThumbyOne CMakeLists.txt — propagated via add_compile_definitions
+ * (for add_subdirectory slots) or ExternalProject CMAKE_ARGS (for
+ * the MPY slot). The inline fallback below is only used when this
+ * picker source is built outside the unified ThumbyOne build. */
 #ifndef THUMBYONE_FW_VERSION
 #define THUMBYONE_FW_VERSION "1.10"
 #endif
