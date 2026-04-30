@@ -5,15 +5,13 @@
 > *One firmware to rule them all, one lobby to find them.*
 > *One file to bring them all, and in the Thumby bind them.*
 
-ThumbyOne is a unified multi-boot firmware for the [TinyCircuits Thumby Color](https://thumby.us/) — the pocketable colour handheld with a 128×128 screen, dual-core Arm Cortex-M33, 520 KB SRAM, and 16 MB of on-board flash. One flash gives you **NES**, **Master System**, **Game Gear**, **Game Boy**, **Mega Drive (Genesis)**, **PC Engine / TurboGrafx-16**, **PICO-8**, **DOOM**, and the full **MicroPython + Tiny Game Engine** experience, each running with the whole device to itself.
+ThumbyOne is a unified multi-boot firmware for the [TinyCircuits Thumby Color](https://thumby.us/) — the tiny colour handheld with a 128×128 screen, dual-core Arm Cortex-M33, 520 KB SRAM, and 16 MB of on-board flash. One flash gives you **NES**, **Master System**, **Game Gear**, **Game Boy**, **Mega Drive (Genesis)**, **PC Engine / TurboGrafx-16**, **PICO-8**, **DOOM**, and the full **MicroPython + Tiny Game Engine** experience, each optimized to run perfectly on the device.
 
 <p align="center">
   <img src="docs/screenshots/nes-game.jpg" width="240" alt="NES on Thumby Color">
   <img src="docs/screenshots/p8-celeste.jpg" width="240" alt="Celeste Classic on PICO-8">
   <img src="docs/screenshots/doom-gameplay.jpg" width="240" alt="Doom on Thumby Color">
 </p>
-
-No per-system re-flashing.
 
 ---
 
@@ -46,8 +44,6 @@ No per-system re-flashing.
 
 All four systems share one FAT drive, visible over USB when you're in the lobby. Size depends on the build: **8.6 MB in the default (MD-enabled) layout**, 9.6 MB in the backward-compat `THUMBYONE_WITH_MD=OFF` build.
 
-**Everything is optional.** If you never want MD, rebuild with `-DTHUMBYONE_WITH_MD=OFF` and reclaim 1 MB for the FAT. If you never want DOOM, drop it from the build for 2.5 MB. Python-only builds turn the three emulators off entirely. See the [build matrix](#build-matrix).
-
 ---
 
 ## Quickstart
@@ -67,7 +63,7 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
 
 ### 1. Flash the firmware
 
-**Download** `firmware_thumbyone.uf2` from the root of this repo (or the latest [release](https://github.com/austinio7116/ThumbyOne/releases)) — or [build from source](#build-matrix).
+**Download** [`firmware_thumbyone.uf2`](https://github.com/austinio7116/ThumbyOne/blob/main/firmware_thumbyone.uf2) from the root of this repo (or the latest [release](https://github.com/austinio7116/ThumbyOne/releases)) — or [build from source](#build-matrix).
 
 > **Already running ThumbyOne 1.04 or earlier?** The 1.05 default build **moves the shared FAT and resizes it from 9.6 MB to 8.6 MB** to make room for Mega Drive / Genesis emulation. The old FAT is invisible to 1.05 — it gets auto-formatted on first boot and everything on it is wiped. **Back up `/roms/`, `/carts/`, `/games/`, `/Saves/` etc. over USB from 1.04 first** (instructions above in the [1.05 changelog callout](#whats-new-in-105)). After flashing, copy back as much as fits — the new ceiling is 8.6 MB.
 >
