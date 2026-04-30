@@ -406,147 +406,45 @@ See the [1.10 changelog](#110) for the supported feature set and known caveats; 
 
 ### 1.11
 
-PSdemo and TinyFreddy run in the MicroPython slot, with the original
-polysynth library's full 7-voice chiptune synthesis emulated in
-software so the songs sound the way the upstream library renders
-them — square wave + noise drums, phase-locked chord effects,
-arpeggios with no fade smear. The lobby gains a real-time clock
-(set in the menu, displayed in the home screen header), and Game
-Boy Color carts that depend on the cart RTC — Pokemon Gold, Silver,
-Crystal — now get correct day-night cycle, time-of-day-only
-encounters, and berry growth.
+Legacy Thumby polysynth games (PSdemo, TinyFreddy) play correctly
+on Color, the lobby gains a real-time clock that drives the home
+screen and Pokemon Crystal / Gold / Silver, and Game Boy / Game
+Boy Color audio is significantly cleaner.
 
-Game Boy and Game Boy Color audio is significantly cleaner — chord
-passages no longer have the harsh fizz that earlier builds had,
-envelope changes don't pop, and the music no longer speeds up or
-crackles under heavy on-screen load.
-
-#### Polysynth (PSdemo / TinyFreddy)
-
-- **PSdemo and TinyFreddy supported.** The original Thumby's
-  `polysynth.py` library is a 7-voice PIO-based synthesiser that
-  drives bare GPIOs — including pins Color uses for the LCD
-  backlight, RGB LED, and three of the buttons. Letting the upstream
-  library run would brick the device while a song plays. The
-  launcher detects bundled `polysynth.py` files and replaces
-  `sys.modules['polysynth']` with a software-emulated shim before
-  the game's first import resolves, so the bundled source never
-  runs and no GPIO conflicts happen.
-- **Full 7-voice polyphony.** All seven logical polysynth voices
-  play simultaneously — none are dropped. (Engine `CHANNEL_COUNT`
-  was bumped from 4 to 7 specifically for this; native Color games
-  using ≤ 4 channels are unaffected.)
-- **Square waves and white-noise drums** are real, not approximated.
-  Engine `ToneSoundResource` got two new wave shapes: `SQUARE` (sign
-  of `sin·t` for crisp chiptune fundamentals + harmonics), and
-  `NOISE` (a 22-bit LFSR matching the upstream `pio_lfsr` algorithm
-  bit-for-bit, with the same lowest+highest-bit feedback polynomial).
-  The default shape stays `SINE` so existing engine games render
-  identically to before.
-- **Phase-locked chord effects** work — when a polysynth instrument
-  declares `phaselock=True` or a `phase` offset, our shim writes the
-  engine's new `phase` property on each affected voice in the same
-  Python statement block, so all voices reset phase within one
-  audio sample (45 µs at the 22050 Hz mixer rate). Chord notes line
-  up audibly in lockstep.
-- **Instant pitch changes** — `ToneSoundResource.instant_freq=True`
-  makes frequency writes skip the engine's normal fade-down/fade-up
-  smoothing. Polysynth's rapid arpeggios, vibrato, and pitch slides
-  no longer smear.
-- **Per-voice mixer-fair gain.** Each active voice's gain scales as
-  `1/N` so the summed envelope of N square / noise voices stays
-  inside the engine mixer's [-1, +1] clamp, matching upstream's
-  PIO-mixer time-multiplexing behaviour. Chord-heavy passages no
-  longer clip into harsh "octave-low" sub-harmonic distortion the
-  ear interprets as a wrong fundamental.
-- **machine.freq hijack** — when a legacy game runs `machine.freq()`
-  to change the system clock (PSdemo runs `machine.freq(125_000_000)`
-  at startup), the launcher routes the call through `engine.freq()`
-  so the engine's audio-mixer PWM-IRQ wrap value gets recomputed for
-  the new clock. Without this, the audio IRQ rate changes
-  proportionally to the clock — PSdemo's clock drop made everything
-  play exactly one octave low.
-- **End-of-song cleanup** — when a polysynth song ends naturally,
-  the shim now silences all engine voices and a try/except wrap
-  around the timer callback ensures any unexpected sequencer error
-  also silences voices and clears `playing` instead of leaving the
-  mixer stuck on whatever chord was last playing.
-
-#### Real-time clock (lobby + Game Boy Color)
-
-- **Lobby SET TIME submenu.** Hold **MENU** to open the lobby menu;
-  there's a new **time** row that shows the current RTC value (or
-  `??:?? SET` if the chip's low-voltage flag is set). Press A to
-  open a five-field date/time picker (year / month / day / hour /
-  minute). UP/DOWN moves between fields, LEFT/RIGHT adjusts with
-  autorepeat, A commits to the BM8563, B cancels. Writing also
-  clears the chip's low-voltage flag so the home-screen indicator
-  goes from `--:--` to a live clock immediately.
-- **Live home-screen clock.** A small `HH:MM` display sits in the
-  header bar between "ThumbyOne" and the USB indicator. Updates
-  once per minute (more responsive than waiting for cursor moves
-  to redraw); falls back to `--:--` when the BM8563's low-voltage
-  flag is set, prompting the user to set the time via the menu.
-- **Pokemon RTC support on Game Boy Color.** ThumbyNES's GB
-  emulator now drives Peanut-GB's cart RTC from the BM8563. At ROM
-  load, the cart's internal RTC is seeded with the wall clock; once
-  per second during play, `gb_tick_rtc()` advances it. Pokemon
-  Crystal / Gold / Silver and other GBC RTC carts (Harvest Moon GB
-  2, etc.) now see real elapsed time — day-night cycle works,
-  time-of-day-only encounters fire when expected, berries grow on
-  the proper schedule. Whether elapsed time across slot-reboot
-  / power-off counts depends on whether the BM8563 keeps ticking
-  between sessions on your device, but in-session time always works.
-- **Hardware-agnostic RTC driver vendored** (`common/lib/bm8563/`,
-  Mika Tuupola's MIT library) plus a thin i2c0 wrapper at
-  `common/lib/thumbyone_rtc.{h,c}` exposing `init / get / set /
-  is_compromised`. Available to every slot that wants wall-clock
-  time access via the existing `THUMBYONE_COMMON_RTC_*` CMake vars.
-
-#### Other
-
+- **Polysynth games run.** The original Thumby's `polysynth.py`
+  library used to brick Color when bundled because the bare-GPIO
+  PIO synth conflicted with the LCD backlight, RGB LED, and three
+  of the face buttons. ThumbyOne now replaces it with a software
+  shim before the game imports, so PSdemo and TinyFreddy play with
+  full 7-voice chiptune synthesis (square waves, noise drums,
+  phase-locked chords, arpeggios — same as the original Thumby).
+- **Set the time in the lobby.** Lobby menu → **SET TIME** opens a
+  date/time picker (year/month/day/hour/minute). The home screen
+  shows a live `HH:MM` clock; it reads `--:--` if the chip's
+  battery has lost power, prompting a re-set.
+- **Pokemon Crystal / Gold / Silver work properly on the GB
+  emulator.** The cart's MBC3 real-time clock is driven by the
+  lobby clock and persisted across power-off via a `.rtc` sidecar
+  alongside each cart's `.sav`, so day-night cycle, time-of-day
+  events, and berry growth all track real elapsed wall time. Other
+  GBC RTC carts (Harvest Moon GB 2 etc.) get the fix for free.
+- **GB / GBC audio significantly cleaner.** Chord-heavy tracks no
+  longer have crunchy aliasing on top of the music; envelope
+  changes don't pop; music doesn't speed up or crackle under heavy
+  on-screen load.
 - **Screenshot chord for legacy Thumby games** — hold **LB + RB**
-  together for ~0.5 s while a legacy game is running. The current
-  frame is captured from the 128×128 shadow framebuffer, box-averaged
-  down to 64×64, and saved as `icon.bmp` in the game's folder. The
-  MPY picker shows it as the game's thumbnail on the next launcher
-  visit. Same UX shape as ThumbyNES's MENU+A capture for ROMs.
-  Original Thumby has no LB/RB buttons so the chord can never
-  collide with legacy game input.
-- **Upstream MicroPython parser bug fix** — patched a
-  long-standing latent bug in `mp_obj_new_int_from_str_len()` (the
-  LONGLONG `MICROPY_LONGINT_IMPL` path) where the function called
-  `strtoll()` on a sliced string without copying it to a null-
-  terminated buffer first. On 32-bit ports any integer literal
-  larger than ~1.07 billion (= the small-int upper bound) takes the
-  overflow path through this function, and `strtoll` would read
-  past the lexer's slice into adjacent vstr memory — sometimes
-  producing wrong values, sometimes producing a misleading
-  `SyntaxError: invalid syntax for integer with base 16`. PSdemo
-  hit this on `ptr32(0x40014000)`. The fix copies the slice to a
-  bounded stack buffer first; correct regardless of adjacent
-  memory contents. Worth proposing upstream.
-- **Defensive frequency clamp in `ToneSoundResource`** — frequency
-  writes are clamped to `[0, 100 kHz]`. Defends against runaway
-  pitch from polysynth `instrument(rise=...)` accumulators that
-  could otherwise push the value into Inf and lock the audio ISR's
-  noise-shape inner loop forever (manifested as a hard hang
-  requiring a power-cycle on long polysynth songs in early v1.11
-  test builds; fixed before release).
+  together for ~0.5 s while a legacy game is running to capture the
+  current frame as the game's picker thumbnail.
+- **MD / PCE FPS overlay simplified** to fps + skipped-frame count
+  only (the per-frame microsecond timings and audio-mode tag are
+  removed).
 
-Note: PSdemo's oscilloscope visualiser (which reads RP2040 GPIO
-state directly via memory-mapped registers at `0x40014000`) shows
-flat lines on Color rather than the synth output — the addresses
-are RP2040-specific and the synth output isn't on a real GPIO
-anyway. The music itself plays correctly.
-
-The relevant engine changes (`CHANNEL_COUNT` bump and the
-`ToneSoundResource` shape / phase / instant_freq additions, the
-RTC driver shared between lobby + ThumbyNES) and the launcher's
-polysynth + machine.freq detection mechanics are detailed in
-[MicroPython + engine slot](#micropython--engine-slot) and
-[ThumbyNES](#thumbynes--nes--master-system--game-gear--game-boy)
-sections.
+Technical detail — the polysynth shim mechanics, the RTC integration
+with Peanut-GB, the GB audio anti-alias filter + frame-pacing clamp,
+and the upstream MicroPython parser fix that PSdemo needed — is in
+the [MicroPython + engine slot](#micropython--engine-slot),
+[ThumbyNES](#thumbynes--nes--master-system--game-gear--game-boy),
+and [Real-time clock](#real-time-clock-111) sections.
 
 ### 1.10
 
