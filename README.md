@@ -375,6 +375,7 @@ MicroPython with the Tiny Game Engine C module baked in, running a custom C pick
 | B | Toggle favourite (★) for the highlighted game |
 | MENU (in picker) | Open info overlay (battery, disk, sort, back to lobby) |
 | MENU (tap, in legacy Thumby game) | Cycle scale preset (1.0× → 1.5× → 1.75× → 2.0× → 2.5× → 1.0×) |
+| LB + RB (held ~0.5 s, in legacy Thumby game) | Capture a screenshot — saves the current 128×128 frame, downsampled to 64×64, as `icon.bmp` in the game's folder. The picker shows it as the game's thumbnail next time round. |
 | MENU (held ~5 s in-game) | Reboot to the lobby (no splash; game state is lost) |
 
 **Game structure** in `/games/<name>/`:
@@ -401,6 +402,76 @@ See the [1.10 changelog](#110) for the supported feature set and known caveats; 
 ---
 
 ## Changelog
+
+### 1.11
+
+PSdemo and TinyFreddy run in the MicroPython slot, with the original
+polysynth library's full 7-voice chiptune synthesis emulated in
+software so the songs sound the way the upstream library renders
+them — square wave + noise drums, phase-locked chord effects,
+arpeggios with no fade smear.
+
+- **PSdemo and TinyFreddy supported.** The original Thumby's
+  `polysynth.py` library is a 7-voice PIO-based synthesiser that
+  drives bare GPIOs — including pins Color uses for the LCD
+  backlight, RGB LED, and three of the buttons. Letting the upstream
+  library run would brick the device while a song plays. The
+  launcher detects bundled `polysynth.py` files and replaces
+  `sys.modules['polysynth']` with a software-emulated shim before
+  the game's first import resolves, so the bundled source never
+  runs and no GPIO conflicts happen.
+- **Full 7-voice polyphony.** All seven logical polysynth voices
+  play simultaneously — none are dropped. (Engine `CHANNEL_COUNT`
+  was bumped from 4 to 7 specifically for this; native Color games
+  using ≤ 4 channels are unaffected.)
+- **Square waves and white-noise drums** are real, not approximated.
+  Engine `ToneSoundResource` got two new wave shapes: `SQUARE` (sign
+  of `sin·t` for crisp chiptune fundamentals + harmonics), and
+  `NOISE` (a 22-bit LFSR matching the upstream `pio_lfsr` algorithm
+  bit-for-bit, with the same lowest+highest-bit feedback polynomial).
+  The default shape stays `SINE` so existing engine games render
+  identically to before.
+- **Phase-locked chord effects** work — when a polysynth instrument
+  declares `phaselock=True` or a `phase` offset, our shim writes the
+  engine's new `phase` property on each affected voice in the same
+  Python statement block, so all voices reset phase within one
+  audio sample (45 µs at the 22050 Hz mixer rate). Chord notes line
+  up audibly in lockstep.
+- **Instant pitch changes** — `ToneSoundResource.instant_freq=True`
+  makes frequency writes skip the engine's normal fade-down/fade-up
+  smoothing. Polysynth's rapid arpeggios, vibrato, and pitch slides
+  no longer smear.
+- **Screenshot chord for legacy Thumby games** — hold **LB + RB**
+  together for ~0.5 s while a legacy game is running. The current
+  frame is captured from the 128×128 shadow framebuffer, box-averaged
+  down to 64×64, and saved as `icon.bmp` in the game's folder. The
+  MPY picker shows it as the game's thumbnail on the next launcher
+  visit. Same UX shape as ThumbyNES's MENU+A capture for ROMs.
+  Original Thumby has no LB/RB buttons so the chord can never
+  collide with legacy game input.
+- **Upstream MicroPython parser bug fix** — patched a
+  long-standing latent bug in `mp_obj_new_int_from_str_len()` (the
+  LONGLONG `MICROPY_LONGINT_IMPL` path) where the function called
+  `strtoll()` on a sliced string without copying it to a null-
+  terminated buffer first. On 32-bit ports any integer literal
+  larger than ~1.07 billion (= the small-int upper bound) takes the
+  overflow path through this function, and `strtoll` would read
+  past the lexer's slice into adjacent vstr memory — sometimes
+  producing wrong values, sometimes producing a misleading
+  `SyntaxError: invalid syntax for integer with base 16`. PSdemo
+  hit this on `ptr32(0x40014000)`. The fix copies the slice to a
+  bounded stack buffer first; correct regardless of adjacent
+  memory contents. Worth proposing upstream.
+
+Note: PSdemo's oscilloscope feature (which reads RP2040 GPIO state
+directly via memory-mapped registers) shows garbage on Color rather
+than the synth output — the addresses are RP2040-specific. The
+music still plays correctly.
+
+The relevant engine changes (`CHANNEL_COUNT` bump and the
+`ToneSoundResource` shape / phase / instant_freq additions) plus
+the launcher's polysynth detection mechanics are detailed in
+[MicroPython + engine slot](#micropython--engine-slot).
 
 ### 1.10
 
@@ -1169,6 +1240,20 @@ main()
   An on-screen FPS overlay is gated by `/.legacy_fps == "1"` (set from the picker's *Legacy FPS* row) and renders into the 128×128 shadow with a tiny embedded 4×6 digit font, top-right corner.
 
 **`engine_io.update_buttons()`** — small new C function in the engine for refreshing the button state machine without paying for a full engine `tick()`. Lets the legacy button shim poll fresh state from inside the game's own loop, which is the difference between legacy games being responsive and not — classic Thumby games drive their own ticking and never call `engine.tick()`, so without this entry point the shim couldn't refresh button state at all without dragging the entire engine pipeline through every `Pin.value()` call. Submitted upstream as a standalone PR.
+
+**Polysynth shim — full 7-voice chiptune emulation (added in 1.11).** The original Thumby's [`polysynth.py`](https://github.com/TinyCircuits/TinyCircuits-Thumby-Games/blob/master/PSdemo/polysynth.py) library (used by PSdemo and TinyFreddy) is a 7-voice PIO-based synthesiser that drives bare GPIOs directly: 7 wave-generator output pins (7, 8, 9, 10, 11, 21, 22), an inhibit pin (25), and a mixed audio output (28). On Color those GPIOs collide with the LCD backlight (7), the RGB LED PWMs (10, 11), and the A / B / RB buttons (21, 22, 25); letting the upstream library run would brick the device while a song plays.
+
+The launcher detects bundled `polysynth.py` (any non-empty file at `<game_dir>/polysynth.py`) before the game's first import resolves and replaces `sys.modules['polysynth']` with our frozen [`polysynth.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/polysynth.py) shim. The bundled source therefore never gets parsed and none of its GPIO claims happen. The game's `polysynth.setpitch / setnote / play / playstream / playnote / instrument` calls land in the shim instead.
+
+The shim routes notes through `engine_audio`'s 7-channel mixer (CHANNEL_COUNT bumped from 4 to 7 in `engine_audio_channel.h` specifically for this — RAM cost ~150 bytes, ISR cost a few extra branch-and-skip iterations per fire). Each logical polysynth voice owns one `ToneSoundResource` whose properties are configured up front:
+
+  - **`shape`** (1.11 addition to `ToneSoundResource`): `0=SINE` (default — engine games unchanged), `1=SQUARE`, `2=NOISE`. Set per voice from the game's `configure(types)` call. The sampler in [`engine_tone_sound_resource.c`](https://github.com/austinio7116/Tiny-Game-Engine/blob/thumbyone/src/resources/engine_tone_sound_resource.c) dispatches on shape: SINE is the original `sinf(omega·time)`, SQUARE is `sign(sinf(omega·time))` (perfect 50% duty rectangular wave with all the harmonic content of a chiptune square), NOISE advances a 22-bit LFSR with feedback polynomial `bit_low XOR bit_high` matching the upstream library's `pio_lfsr` algorithm bit-for-bit. The LFSR step rate is gated by `frequency` so the noise's perceived pitch / brightness scales with the same control surface the original PIO uses.
+  - **`instant_freq`** (1.11 addition): bool, default false. When true, frequency writes skip the engine's FADE_DOWN → FADE_UP smoothing (which exists to prevent clicks when one resource transitions between two unrelated pitches in normal engine usage). Polysynth wants snappy pitch changes for arpeggios, vibrato, and pitch rises — the fade smear sounds noticeably worse than the absence of a transition click for these patterns. Set true on every shim-managed voice.
+  - **`phase`** (1.11 addition): float, settable in `[0, 1)` representing fraction-of-cycle. Writing `tone.phase = 0.0` resets `self->time = 0` (or `phase / frequency` for non-zero values), which is the lock-step needed for chord coherence. The same property lets the original library's per-instrument `phase` parameter (in halfcycles, where 0.5 = 90°, 1.0 = 180°, 1.5 = 270°) work correctly — the shim divides by 2 to get a fraction-of-cycle and writes the result.
+
+Phase locking across multiple voices uses the engine's 22050 Hz mixer rate as an alignment quantum: the shim collects all phase-locked note starts in the current `audiotick` event-flush loop, then applies them as a tight sequence of Python statements (`tone.phase = 0.0; tone.frequency = hz` per voice). Each Python store takes single-digit microseconds; even a 7-voice chord lock fits inside one 45 µs audio sample, so all voices reset their `time` accumulator within the same ISR fire and produce the chord with audibly perfect phase alignment. This matches what the upstream library achieves via its `synthcore.put(0)` mixer-disable + parallel wavegen FIFO writes — different mechanism, same audible result.
+
+What's not emulated: PSdemo's oscilloscope feature reads raw RP2040 GPIO state via direct register access at `0x40014000`, which is the RP2040 SIO GPIO_IN base. RP2350 has a different memory map; the read returns garbage, which the visualiser displays as garbage. The synth output also doesn't appear on a physical GPIO on Color (the shim writes via `engine_audio.play(tone, channel)` straight into the mixer ISR), so even if the addresses were correct there'd be nothing to read. The music still plays correctly — only the diagnostic visualiser is affected.
 
 **`zlib` compatibility** — MicroPython 1.21+ renamed `zlib` to `deflate`. We freeze a small `zlib.py` wrapper into firmware ([`mp-thumby/ports/rp2/modules/zlib.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/zlib.py)) — re-exports `decompress` / `compress` over `deflate.DeflateIO`. Required for BadApple's per-frame zlib-compressed audio block decoder.
 
