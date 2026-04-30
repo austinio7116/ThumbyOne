@@ -234,6 +234,7 @@ A six-in-one retro emulator running Nofrendo for NES, smsplus for Master System 
 - Live-pan read mode for Game Boy / GG (the 128×128 screen is narrower than the native output; pan to see the edges)
 - Play-while-cropped pan chord (LB + d-pad) for MD and PCE — pan the source viewport without losing game control
 - Game Boy Color carts run with their native CGB palette (DMG carts use the six built-in shade palettes)
+- **Cart-RTC support for Pokemon Crystal / Gold / Silver** (new in 1.11) — the GB cart's MBC3 real-time clock is driven from the lobby-set BM8563, so day-night cycle, time-of-day-only encounters, and berry growth all work correctly. Other GBC RTC carts (Harvest Moon GB 2, etc.) get the same fix for free
 - Chained-XIP fallback — fragmented ROMs still map from flash and run full-speed without a defrag
 - Cluster-level defragmenter with before/after preview and live move visualisation (picker menu → **Defragment now**)
 - Configurable CPU clock per-ROM
@@ -409,7 +410,13 @@ PSdemo and TinyFreddy run in the MicroPython slot, with the original
 polysynth library's full 7-voice chiptune synthesis emulated in
 software so the songs sound the way the upstream library renders
 them — square wave + noise drums, phase-locked chord effects,
-arpeggios with no fade smear.
+arpeggios with no fade smear. The lobby gains a real-time clock
+(set in the menu, displayed in the home screen header), and Game
+Boy Color carts that depend on the cart RTC — Pokemon Gold, Silver,
+Crystal — now get correct day-night cycle, time-of-day-only
+encounters, and berry growth.
+
+#### Polysynth (PSdemo / TinyFreddy)
 
 - **PSdemo and TinyFreddy supported.** The original Thumby's
   `polysynth.py` library is a 7-voice PIO-based synthesiser that
@@ -441,6 +448,58 @@ arpeggios with no fade smear.
   makes frequency writes skip the engine's normal fade-down/fade-up
   smoothing. Polysynth's rapid arpeggios, vibrato, and pitch slides
   no longer smear.
+- **Per-voice mixer-fair gain.** Each active voice's gain scales as
+  `1/N` so the summed envelope of N square / noise voices stays
+  inside the engine mixer's [-1, +1] clamp, matching upstream's
+  PIO-mixer time-multiplexing behaviour. Chord-heavy passages no
+  longer clip into harsh "octave-low" sub-harmonic distortion the
+  ear interprets as a wrong fundamental.
+- **machine.freq hijack** — when a legacy game runs `machine.freq()`
+  to change the system clock (PSdemo runs `machine.freq(125_000_000)`
+  at startup), the launcher routes the call through `engine.freq()`
+  so the engine's audio-mixer PWM-IRQ wrap value gets recomputed for
+  the new clock. Without this, the audio IRQ rate changes
+  proportionally to the clock — PSdemo's clock drop made everything
+  play exactly one octave low.
+- **End-of-song cleanup** — when a polysynth song ends naturally,
+  the shim now silences all engine voices and a try/except wrap
+  around the timer callback ensures any unexpected sequencer error
+  also silences voices and clears `playing` instead of leaving the
+  mixer stuck on whatever chord was last playing.
+
+#### Real-time clock (lobby + Game Boy Color)
+
+- **Lobby SET TIME submenu.** Hold **MENU** to open the lobby menu;
+  there's a new **time** row that shows the current RTC value (or
+  `??:?? SET` if the chip's low-voltage flag is set). Press A to
+  open a five-field date/time picker (year / month / day / hour /
+  minute). UP/DOWN moves between fields, LEFT/RIGHT adjusts with
+  autorepeat, A commits to the BM8563, B cancels. Writing also
+  clears the chip's low-voltage flag so the home-screen indicator
+  goes from `--:--` to a live clock immediately.
+- **Live home-screen clock.** A small `HH:MM` display sits in the
+  header bar between "ThumbyOne" and the USB indicator. Updates
+  once per minute (more responsive than waiting for cursor moves
+  to redraw); falls back to `--:--` when the BM8563's low-voltage
+  flag is set, prompting the user to set the time via the menu.
+- **Pokemon RTC support on Game Boy Color.** ThumbyNES's GB
+  emulator now drives Peanut-GB's cart RTC from the BM8563. At ROM
+  load, the cart's internal RTC is seeded with the wall clock; once
+  per second during play, `gb_tick_rtc()` advances it. Pokemon
+  Crystal / Gold / Silver and other GBC RTC carts (Harvest Moon GB
+  2, etc.) now see real elapsed time — day-night cycle works,
+  time-of-day-only encounters fire when expected, berries grow on
+  the proper schedule. Whether elapsed time across slot-reboot
+  / power-off counts depends on whether the BM8563 keeps ticking
+  between sessions on your device, but in-session time always works.
+- **Hardware-agnostic RTC driver vendored** (`common/lib/bm8563/`,
+  Mika Tuupola's MIT library) plus a thin i2c0 wrapper at
+  `common/lib/thumbyone_rtc.{h,c}` exposing `init / get / set /
+  is_compromised`. Available to every slot that wants wall-clock
+  time access via the existing `THUMBYONE_COMMON_RTC_*` CMake vars.
+
+#### Other
+
 - **Screenshot chord for legacy Thumby games** — hold **LB + RB**
   together for ~0.5 s while a legacy game is running. The current
   frame is captured from the 128×128 shadow framebuffer, box-averaged
@@ -462,16 +521,27 @@ arpeggios with no fade smear.
   hit this on `ptr32(0x40014000)`. The fix copies the slice to a
   bounded stack buffer first; correct regardless of adjacent
   memory contents. Worth proposing upstream.
+- **Defensive frequency clamp in `ToneSoundResource`** — frequency
+  writes are clamped to `[0, 100 kHz]`. Defends against runaway
+  pitch from polysynth `instrument(rise=...)` accumulators that
+  could otherwise push the value into Inf and lock the audio ISR's
+  noise-shape inner loop forever (manifested as a hard hang
+  requiring a power-cycle on long polysynth songs in early v1.11
+  test builds; fixed before release).
 
-Note: PSdemo's oscilloscope feature (which reads RP2040 GPIO state
-directly via memory-mapped registers) shows garbage on Color rather
-than the synth output — the addresses are RP2040-specific. The
-music still plays correctly.
+Note: PSdemo's oscilloscope visualiser (which reads RP2040 GPIO
+state directly via memory-mapped registers at `0x40014000`) shows
+flat lines on Color rather than the synth output — the addresses
+are RP2040-specific and the synth output isn't on a real GPIO
+anyway. The music itself plays correctly.
 
 The relevant engine changes (`CHANNEL_COUNT` bump and the
-`ToneSoundResource` shape / phase / instant_freq additions) plus
-the launcher's polysynth detection mechanics are detailed in
-[MicroPython + engine slot](#micropython--engine-slot).
+`ToneSoundResource` shape / phase / instant_freq additions, the
+RTC driver shared between lobby + ThumbyNES) and the launcher's
+polysynth + machine.freq detection mechanics are detailed in
+[MicroPython + engine slot](#micropython--engine-slot) and
+[ThumbyNES](#thumbynes--nes--master-system--game-gear--game-boy)
+sections.
 
 ### 1.10
 
@@ -1255,6 +1325,12 @@ Phase locking across multiple voices uses the engine's 22050 Hz mixer rate as an
 
 What's not emulated: PSdemo's oscilloscope feature reads raw RP2040 GPIO state via direct register access at `0x40014000`, which is the RP2040 SIO GPIO_IN base. RP2350 has a different memory map; the read returns garbage, which the visualiser displays as garbage. The synth output also doesn't appear on a physical GPIO on Color (the shim writes via `engine_audio.play(tone, channel)` straight into the mixer ISR), so even if the addresses were correct there'd be nothing to read. The music still plays correctly — only the diagnostic visualiser is affected.
 
+**`machine.freq` hijack — ties into the polysynth fix.** PSdemo runs `machine.freq(125_000_000)` at startup to "ensure full speed". Color boots at a higher clock; the standard rp2-port `machine.freq` calls `set_sys_clock_khz` and returns. That's fine for the CPU but drops a hidden audio bug: the engine's audio-mixer PWM-IRQ wrap was computed for the BOOT clock at engine init time, not the new clock. With the wrap stuck at the old value, the IRQ fires at a proportionally lower rate, samples take longer than `1/22050` s to play, and audio comes out at exactly half-rate — one octave low — when the user-side clock halves. Engine 1.11 exposes `engine.freq()` which calls `set_sys_clock_khz` AND `engine_audio_freq_adjust()` (recomputes the PWM-IRQ wrap for the new clock). The launcher's `_MachineShim.freq` routes `machine.freq(hz)` through `engine.freq(hz)` so any legacy game's clock change keeps the audio rate correct without source modification.
+
+**Per-voice mixer-fair gain.** `engine_audio` mixes channels via simple summation then clamps to [-1, +1]. Summing 7 polysynth voices each at full ±1.0 amplitude clips brutally; the harmonic distortion the ear interprets as a wrong fundamental made earlier 1.11 test builds sound "octave low" in chord-heavy passages. Upstream's PIO mixer dodges this naturally because it's a 1-bit time-multiplexer — each voice's instantaneous amplitude contributes 1/N of the output duty, sum bounded to ±1.0 by construction. Our shim replicates the upstream semantics by setting each voice's `channel.gain = 1/corecount` in `_set_voice` and `_apply_per_voice_gain()` (called from `configure()` and `enabled()` whenever the active count changes). Per-voice peak amplitude scales with N exactly as the upstream library; chord summing fits cleanly without clipping.
+
+**Defensive frequency clamp.** `tone_sound_resource_set_frequency` clamps incoming values to `[0, 100 kHz]`. The NOISE-shape sampler advances `lfsr_phase` by `frequency * dt` per outer ISR fire, then a `while(lfsr_phase >= 1.0f)` inner loop drains it one LFSR step at a time. With `frequency = Inf` the addition produces Inf, the loop's subtract keeps it Inf, and the audio ISR never returns — locking up the device hard. PSdemo songs with `instrument(rise=...)` accumulators could push the value to Inf over time, which hung early 1.11 builds. The clamp catches NaN and negatives via `!(frequency >= 0.0f)` (NaN compares false to all finite numbers) and Inf via the upper bound; sanitises everything to a sane range.
+
 **`zlib` compatibility** — MicroPython 1.21+ renamed `zlib` to `deflate`. We freeze a small `zlib.py` wrapper into firmware ([`mp-thumby/ports/rp2/modules/zlib.py`](https://github.com/austinio7116/micropython/blob/thumbyone-slot/ports/rp2/modules/zlib.py)) — re-exports `decompress` / `compress` over `deflate.DeflateIO`. Required for BadApple's per-frame zlib-compressed audio block decoder.
 
 **MicroPython viper `STORE_ATTR` reverted to MP 1.19.1 behaviour** — load-bearing for Umby & Glow. Upstream commit [`9714a0e`](https://github.com/micropython/micropython/commit/9714a0e) (Jim Mussared, Jul 2022, *"py/emitnative: Fix STORE_ATTR viper code-gen when value is not a pyobj"*) inserted an `MP_F_CONVERT_NATIVE_TO_OBJ` call into `emit_native_store_attr` so viper-typed `int` values stored into Python attributes get boxed via `mp_obj_new_int(val)` before reaching `mp_store_attr`. That's a legitimate type-safety fix from upstream's perspective — the old code passed the raw 32-bit word straight through to `mp_store_attr` as `mp_obj_t`, which is type confusion if the caller doesn't construct a valid tagged-pointer bit pattern. **But Umby & Glow's viper-compiled physics tick code deliberately exploits exactly that:** the upstream game writes attribute stores like
@@ -1301,6 +1377,34 @@ That extra heap is what unblocked import-heavy startup cases like Thumbalaga (Me
 - **Grid**: 2×2 of 48×48 tiles at positions `(12,12)`, `(68,12)`, `(12,68)`, `(68,68)`. D-pad navigation via XOR on the cursor (UP/DOWN flip bit 1, LEFT/RIGHT flip bit 0).
 - **Greyed tiles**: disabled slots (via `THUMBYONE_WITH_*` build flags) are drawn normally then per-channel right-shifted by 2 in place — a 1/4-brightness overlay that reads as "present but unavailable" rather than "missing".
 - **USB state row**: top strip re-renders every 100 ms to reflect mount / activity state. Idle → green dot + "USB"; mounted → blue dot; transferring → red dot. The physical RGB LED (PWM on GP10/11/12) mirrors the same state at full brightness.
+
+## Real-time clock (1.11)
+
+ThumbyOne 1.11 added a shared real-time clock infrastructure: a vendored hardware-agnostic BM8563 driver, a thin i2c0 wrapper, lobby UI to set the time, a live home-screen clock, and a Game Boy cart-RTC integration in ThumbyNES.
+
+**Hardware:** Color carries a [BM8563](https://www.lcsc.com/datasheet/lcsc_datasheet_2308181040_GATEMODE-BM8563EMA_C269878.pdf) I²C real-time clock at address `0x51` on `i2c0` (SDA = GP8, SCL = GP9). The chip exposes a low-voltage (`VL`) flag in its seconds register that latches whenever supply drops below threshold — read back later as "time was lost since this flag was last cleared". A successful set clears the flag; the lobby UI uses this to drive the visible difference between `--:--` (compromised) and `HH:MM` (trustworthy).
+
+**Driver layout:**
+
+- [`common/lib/bm8563/bm8563.{c,h}`](common/lib/bm8563/) — vendored straight from the engine's `lib/bm8563/`. Mika Tuupola's hardware-agnostic library (MIT). 281 lines C, 116 lines header.
+- [`common/lib/thumbyone_rtc.{c,h}`](common/lib/) — thin wrapper. Sets up i2c0 at 100 kHz (the engine's vetted speed; 400 kHz was unreliable on this board's pull-up resistor values), enables the SDA/SCL pulls on GP8/9, registers C i2c read/write callbacks with the bm8563 driver, and exposes a small public API: `init / get / set / is_compromised`. Idempotent — safe to call from any slot's startup.
+- CMake: `THUMBYONE_COMMON_RTC_SRC` + `THUMBYONE_COMMON_RTC_INCLUDE` are exported from `common/CMakeLists.txt` for any consumer that wants RTC access. Lobby and ThumbyNES both pick them up.
+
+**Lobby UI:**
+
+- **SET TIME submenu** ([`lobby/lobby_main.c::lobby_set_time_open()`](lobby/lobby_main.c)) — five-field date/time picker (year, month, day, hour, minute). UP/DOWN moves between fields, LEFT/RIGHT adjusts with autorepeat, A commits to the chip and exits, B cancels. The working state is a `struct tm` on the stack — only flushed to the chip on commit, so the user can dial through values without each LEFT/RIGHT triggering an I²C write (which would also fight the chip's ticking second register mid-edit).
+- **Home-screen clock** — `HH:MM` rendered in the header bar between "ThumbyOne" and the USB indicator. Right-aligned just left of the USB label; falls back to dim `--:--` when `is_compromised()` returns true.
+- **Live tick** — a `lobby_clock_tick()` helper runs once per second from inside the home-loop's `USB_PUMP` macro. It does a single 7-byte I²C read, compares the minute against `g_last_clock_minute`, and only re-renders the home screen when the minute actually changes (so the clock advances exactly once a minute, no per-second flicker on the SPI present).
+
+**Pokemon GBC RTC:** Peanut-GB implements MBC3 cart RTC (`gb_set_rtc()`, `gb_tick_rtc()`) but the naive integration — read BM8563 at game load, seed `cart_rtc` to wall clock, tick once per second — produced a multi-hour shift on every reload. The bug: Pokemon's bootcode reads `cart_rtc`, then ZEROS it as part of its own RTC initialisation. With our seed clobbered, `cart_rtc` ticked from 0 during play, Pokemon wrote `last_seen = small_tick_count` to cart RAM, and on the next reload our seed put wall clock back into `cart_rtc` — Pokemon's elapsed math then returned `wall_clock − small`, advancing the in-game clock by ≈17 hours immediately (the diff between user-entered start time and "midnight day 0").
+- 
+- The fix is a `.rtc` sidecar that persists `cart_rtc[5] + wall_clock_unix_secs` alongside the `.sav`. At every successful `battery_save`, we write the sidecar. At cart load, if the sidecar exists we restore `cart_rtc = saved_cart_rtc + (now − saved_wall)`. Pokemon's first read at boot then reads exactly what `last_seen + real_wall_delta` would be on a real persistent-RTC cart; Pokemon's elapsed math gives the actual real-world delta, day/night and berry growth track wall clock across power-off, and there's no shift on reload because Pokemon's view of cart_rtc is consistent with its `last_seen` snapshot. On brand-new games (no sidecar yet), we don't seed — Pokemon zeros cart_rtc anyway, and the first save creates the sidecar that subsequent loads use.
+- 
+- Save state files (`.sta`) bumped from V1 to V2 — V2 embeds the wall-clock unix seconds at save moment. On state load, we advance `cart_rtc` by `(now − saved_wall)` so day/night / berry growth track real elapsed wall clock across the time the state file sat on disk. V1 files still load (V1 fallback path skips the wall-delta advance — same behaviour as a fresh state).
+- 
+- `gbc_tick_rtc()` is called once per real-world second from the runner loop (paced via `time_us_64()` accumulator, so fast-forward / scaler stalls don't desync the cart's clock from reality). Internal helpers `gbc_peek_cart_rtc(out[5])` / `gbc_poke_cart_rtc(in[5])` expose the raw bytes for sidecar persistence; `advance_cart_rtc(rtc[5], delta_secs)` does the carry math (sec → min → hour → 9-bit day with overflow flag, halt bit preserved).
+
+Standalone ThumbyNES builds (without ThumbyOne) skip the RTC integration entirely — the `#ifdef THUMBYONE_SLOT_MODE` guards keep the standalone build dependency-free.
 
 ## Build system
 

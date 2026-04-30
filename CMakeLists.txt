@@ -133,6 +133,7 @@ add_executable(lobby
     ${THUMBYONE_COMMON_BACKLIGHT_SRC}
     ${THUMBYONE_COMMON_LED_SRC}
     ${THUMBYONE_COMMON_SETTINGS_SRC}
+    ${THUMBYONE_COMMON_RTC_SRC}
 )
 target_include_directories(lobby PRIVATE
     lobby
@@ -144,6 +145,7 @@ target_include_directories(lobby PRIVATE
     ${THUMBYONE_COMMON_BACKLIGHT_INCLUDE}
     ${THUMBYONE_COMMON_LED_INCLUDE}
     ${THUMBYONE_COMMON_SETTINGS_INCLUDE}
+    ${THUMBYONE_COMMON_RTC_INCLUDE}
 )
 # tusb_config.h lives in lobby/ — put the lobby dir BEFORE the
 # tinyUSB include search so our config is picked up rather than
@@ -158,6 +160,7 @@ target_link_libraries(lobby PRIVATE
     hardware_pwm
     hardware_pio    # shared thumbyone_backlight (PIO PWM on GP7)
     hardware_adc
+    hardware_i2c    # BM8563 RTC chip on i2c0 (GPIO 8/9)
     hardware_spi
     hardware_dma
     hardware_flash

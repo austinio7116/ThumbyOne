@@ -165,3 +165,18 @@ set(THUMBYONE_COMMON_SETTINGS_SRC
 set(THUMBYONE_COMMON_SETTINGS_INCLUDE
     ${CMAKE_CURRENT_SOURCE_DIR}/lib
     PARENT_SCOPE)
+
+# Shared BM8563 RTC driver — vendored from the engine's lib/bm8563
+# (Tuupola's hardware-agnostic library) plus a thin i2c0 wrapper.
+# Lobby uses it for the SET TIME submenu and corner clock; ThumbyNES
+# slot uses it to feed peanut-GB's gb_set_rtc / gb_tick_rtc for
+# Pokemon Crystal/Gold/Silver day-night and berry growth. Pulls
+# hardware_i2c via pico-sdk (every consumer already links pico_stdlib).
+set(THUMBYONE_COMMON_RTC_SRC
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/thumbyone_rtc.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib/bm8563/bm8563.c
+    PARENT_SCOPE)
+
+set(THUMBYONE_COMMON_RTC_INCLUDE
+    ${CMAKE_CURRENT_SOURCE_DIR}/lib
+    PARENT_SCOPE)

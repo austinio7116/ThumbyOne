@@ -28,6 +28,8 @@
 #include "thumbyone_fs.h"
 #include "thumbyone_settings.h"
 #include "thumbyone_backlight.h"
+#include "thumbyone_rtc.h"
+#include <time.h>
 
 #include "lcd_gc9107.h"
 #include "font.h"
@@ -530,6 +532,43 @@ static void draw_selection_corners(int x, int y) {
     }
 }
 
+/* Last-displayed RTC minute, so the home-loop pump can detect when
+ * the rendered clock has gone stale and trigger a re-render. -1 is
+ * the "no value rendered yet" sentinel — first lobby_clock_tick()
+ * call after boot always redraws so the clock reads its real
+ * starting value. */
+static int g_last_clock_minute = -1;
+
+/* Forward decl — called by lobby_clock_tick() below, defined a bit
+ * lower in this file. Keeps the clock helper near the rest of the
+ * polled-loop housekeeping. */
+static void render_home(void);
+
+/* Called from the home-screen loop's USB_PUMP at ~1 Hz. Cheap: one
+ * I2C read of 7 bytes. If the BM8563's reported minute differs from
+ * what's currently on screen, repaint the home so the clock value
+ * advances. The home-render itself is cheap (no SPI cost change vs
+ * the cursor-move re-renders that already happen).
+ *
+ * Compromised flag and read failures are reflected by the displayed
+ * "--:--" — we still advance the cached minute past whatever stale
+ * value the chip reported so the next valid read triggers a refresh. */
+static void lobby_clock_tick(void) {
+    struct tm rtc;
+    int now_minute;
+    if (thumbyone_rtc_is_compromised() ||
+        thumbyone_rtc_get(&rtc) != 0) {
+        now_minute = -2;   /* sentinel: distinct from -1 (initial) */
+    } else {
+        now_minute = rtc.tm_min;
+    }
+    if (now_minute != g_last_clock_minute) {
+        g_last_clock_minute = now_minute;
+        render_home();
+    }
+}
+
+
 static void render_home(void) {
     for (int i = 0; i < 128 * 128; ++i) g_fb[i] = COL_BG;
 
@@ -576,6 +615,34 @@ static void render_home(void) {
                          ? COL_BAR_FG : COL_USB_OFF;   /* dim for disabled */
         int lw = nes_font_width(label);
         nes_font_draw(g_fb, label, (128 - lw) / 2, 121, col);
+    }
+
+    /* Tiny clock: HH:MM in the header bar between the "ThumbyOne"
+     * title and the USB label. Drawn dim ("--:--") if the BM8563
+     * is uninitialised / has its low-voltage flag set, so the
+     * user gets a visual cue to set the time via the menu. The
+     * clock value comes from a single I2C read; no caching — the
+     * home screen only re-renders on cursor moves and after slot
+     * returns, so the cost is bounded. */
+    {
+        struct tm rtc;
+        char buf[8];
+        uint16_t col = COL_BAR_FG;
+        if (thumbyone_rtc_is_compromised() ||
+            thumbyone_rtc_get(&rtc) != 0) {
+            snprintf(buf, sizeof(buf), "--:--");
+            col = COL_USB_OFF;   /* dim — same colour as inactive USB */
+        } else {
+            snprintf(buf, sizeof(buf), "%02d:%02d",
+                     rtc.tm_hour, rtc.tm_min);
+        }
+        /* Right-align the clock just left of the USB label so we
+         * don't overlap. The font is fixed-pitch enough that
+         * nes_font_width gives a tight bound. */
+        int cw = nes_font_width(buf);
+        int cx = USB_LABEL_X - cw - 4;
+        if (cx < 60) cx = 60;   /* keep clear of "ThumbyOne" */
+        nes_font_draw(g_fb, buf, cx, 2, col);
     }
 
     /* Paint the USB indicator into the top-right strip. The header
@@ -660,6 +727,7 @@ typedef enum {
     LMI_DISK,
     LMI_USB,
     LMI_FW,
+    LMI_TIME,       /* shows current RTC value; A opens set-time submenu */
     LMI_VOL,        /* adjustable: LEFT/RIGHT to change */
     LMI_BRIGHT,     /* adjustable: LEFT/RIGHT to change, live-applied */
     LMI_CLOSE,
@@ -667,7 +735,7 @@ typedef enum {
 } lobby_menu_item_t;
 
 static bool lobby_menu_item_selectable(lobby_menu_item_t it) {
-    return it == LMI_VOL || it == LMI_BRIGHT || it == LMI_CLOSE;
+    return it == LMI_TIME || it == LMI_VOL || it == LMI_BRIGHT || it == LMI_CLOSE;
 }
 
 /* Scratch backdrop used while the menu is up — captured at open,
@@ -759,6 +827,253 @@ static void draw_thin_bar(int x, int y, int w, int h,
 #define THUMBYONE_FW_VERSION "1.11"
 #endif
 
+/* --- SET TIME submenu --------------------------------------------------
+ *
+ * Modal sub-window that lets the user set the BM8563 RTC. Opened by
+ * pressing A on the LMI_TIME row of the main menu. UI is a 5-field
+ * picker (year, month, day, hour, minute) — UP/DOWN moves between
+ * fields, LEFT/RIGHT adjusts the active field with autorepeat, A
+ * commits to the chip and exits, B cancels and exits without writing.
+ *
+ * Design choice: edit a struct tm in-memory, only flush on A. That
+ * way the user can dial through values without each LEFT/RIGHT
+ * triggering an I2C write — the chip's seconds register would also
+ * keep ticking under us mid-edit and produce odd display.
+ *
+ * Bounds are deliberately permissive (year 2024..2099, mday clamped
+ * to 31 — not month-aware). The BM8563 stores BCD with a century
+ * bit, so any year in our range round-trips cleanly. If the user
+ * picks an impossible date (Feb 30) the chip stores it literally
+ * and Pokemon's RTC math will tolerate it (it only cares about
+ * elapsed wall-clock time).
+ */
+typedef enum {
+    STF_YEAR = 0,
+    STF_MONTH,
+    STF_DAY,
+    STF_HOUR,
+    STF_MINUTE,
+    STF_COUNT,
+} set_time_field_t;
+
+static const char *const set_time_field_label[STF_COUNT] = {
+    "YEAR", "MONTH", "DAY", "HOUR", "MIN",
+};
+
+static int set_time_field_min(set_time_field_t f) {
+    switch (f) {
+        case STF_YEAR:   return 2024;
+        case STF_MONTH:  return 1;
+        case STF_DAY:    return 1;
+        case STF_HOUR:   return 0;
+        case STF_MINUTE: return 0;
+        default: return 0;
+    }
+}
+static int set_time_field_max(set_time_field_t f) {
+    switch (f) {
+        case STF_YEAR:   return 2099;
+        case STF_MONTH:  return 12;
+        case STF_DAY:    return 31;
+        case STF_HOUR:   return 23;
+        case STF_MINUTE: return 59;
+        default: return 0;
+    }
+}
+
+static int *set_time_field_ptr(struct tm *t, set_time_field_t f) {
+    switch (f) {
+        case STF_YEAR:   return &t->tm_year;
+        case STF_MONTH:  return &t->tm_mon;
+        case STF_DAY:    return &t->tm_mday;
+        case STF_HOUR:   return &t->tm_hour;
+        case STF_MINUTE: return &t->tm_min;
+        default: return NULL;
+    }
+}
+
+/* Render the set-time submenu over the menu backdrop. cursor is the
+ * currently-edited field; t is the working struct tm. */
+static void render_set_time(struct tm *t, set_time_field_t cursor) {
+    memcpy(g_fb, g_menu_backdrop, sizeof(g_fb));
+
+    /* Title bar */
+    for (int y = 0; y < 10; ++y)
+        for (int x = 0; x < 128; ++x)
+            g_fb[y * 128 + x] = L_COL_BG;
+    for (int x = 0; x < 128; ++x) g_fb[10 * 128 + x] = L_COL_MENU_TITLE;
+    nes_font_draw(g_fb, "SET TIME", 2, 2, L_COL_MENU_TITLE);
+
+    /* 5 field rows. Each: "LABEL    VALUE" with an arrow indicator
+     * on the left when the cursor is on this row. */
+    int y = 18;
+    const int row_h = 12;
+    char val[16];
+    for (int f = 0; f < STF_COUNT; ++f) {
+        bool here = (cursor == f);
+        if (here) fill_row_hl(y, row_h);
+        if (here) nes_font_draw(g_fb, ">", 2, y + 2, L_COL_HIGHLT);
+        nes_font_draw(g_fb, set_time_field_label[f], 10, y + 2,
+                      here ? L_COL_HIGHLT : L_COL_DIM);
+        switch (f) {
+            case STF_YEAR:
+                snprintf(val, sizeof(val), "%4d", t->tm_year + 1900);
+                break;
+            case STF_MONTH:
+                snprintf(val, sizeof(val), "%02d", t->tm_mon + 1);
+                break;
+            case STF_DAY:
+                snprintf(val, sizeof(val), "%02d", t->tm_mday);
+                break;
+            case STF_HOUR:
+                snprintf(val, sizeof(val), "%02d", t->tm_hour);
+                break;
+            case STF_MINUTE:
+                snprintf(val, sizeof(val), "%02d", t->tm_min);
+                break;
+            default:
+                val[0] = 0;
+                break;
+        }
+        int vw = nes_font_width(val);
+        nes_font_draw(g_fb, val, 128 - vw - 8, y + 2,
+                      here ? L_COL_HIGHLT : L_COL_TEXT);
+        y += row_h;
+    }
+
+    /* Footer */
+    for (int xx = 0; xx < 128; ++xx) g_fb[120 * 128 + xx] = L_COL_MENU_TITLE;
+    const char *hint = "A: save  B: cancel";
+    int hw = nes_font_width(hint);
+    nes_font_draw(g_fb, hint, (128 - hw) / 2, 122, L_COL_DIM);
+
+    nes_lcd_present(g_fb);
+    nes_lcd_wait_idle();
+}
+
+/* Open the set-time submenu. Returns true if the user committed a
+ * new time (caller may want to redraw / reload). The backdrop is
+ * the already-darkened g_menu_backdrop the parent menu uses. */
+static bool lobby_set_time_open(void) {
+    struct tm t;
+    /* Seed from the current chip value if possible; else from a
+     * sane default. tm_sec is preserved at zero on commit so we
+     * don't fight the chip's ticking second. */
+    if (thumbyone_rtc_get(&t) != 0) {
+        memset(&t, 0, sizeof(t));
+        t.tm_year = 2026 - 1900;
+        t.tm_mon  = 0;
+        t.tm_mday = 1;
+        t.tm_hour = 12;
+        t.tm_min  = 0;
+    }
+    /* Clamp into our editable range so the cursor doesn't start out
+     * at e.g. tm_year=120 (= 2020) which our YEAR_MIN excludes. */
+    if (t.tm_year + 1900 < 2024) t.tm_year = 2024 - 1900;
+    if (t.tm_year + 1900 > 2099) t.tm_year = 2099 - 1900;
+    if (t.tm_mon < 0)   t.tm_mon = 0;
+    if (t.tm_mon > 11)  t.tm_mon = 11;
+    if (t.tm_mday < 1)  t.tm_mday = 1;
+    if (t.tm_mday > 31) t.tm_mday = 31;
+
+    set_time_field_t cursor = STF_HOUR;  /* most-frequently-changed first */
+
+    bool prev_up = btn_up_pressed(), prev_down = btn_down_pressed();
+    bool prev_left = btn_left_pressed(), prev_right = btn_right_pressed();
+    bool prev_a = btn_a_pressed(), prev_b = btn_b_pressed();
+
+    const uint32_t AR_DELAY_US = 300u * 1000u;
+    const uint32_t AR_STEP_US  =  60u * 1000u;
+    uint32_t ar_left_next_us  = 0;
+    uint32_t ar_right_next_us = 0;
+
+    render_set_time(&t, cursor);
+
+    while (1) {
+        lobby_usb_task();   /* keep MSC responsive */
+
+        bool up = btn_up_pressed();
+        bool down = btn_down_pressed();
+        bool left = btn_left_pressed();
+        bool right = btn_right_pressed();
+        bool a = btn_a_pressed();
+        bool b = btn_b_pressed();
+
+        bool dirty = false;
+
+        if (up && !prev_up) {
+            cursor = (set_time_field_t)((cursor + STF_COUNT - 1) % STF_COUNT);
+            dirty = true;
+        }
+        if (down && !prev_down) {
+            cursor = (set_time_field_t)((cursor + 1) % STF_COUNT);
+            dirty = true;
+        }
+
+        uint32_t now_us = (uint32_t)time_us_64();
+        int *fp = set_time_field_ptr(&t, cursor);
+        int lo = set_time_field_min(cursor);
+        int hi = set_time_field_max(cursor);
+        int store_offset = (cursor == STF_YEAR) ? 1900
+                          : (cursor == STF_MONTH) ? 1
+                                                  : 0;
+
+        /* LEFT — decrement with wrap-around on edge tap, autorepeat
+         * while held. We map the working tm fields to the
+         * user-visible range via store_offset (year stored as -1900,
+         * month as 0-indexed) and clamp into [lo, hi] before writing
+         * back. */
+        if (fp) {
+            int visible = *fp + store_offset;
+            if (left && !prev_left) {
+                ar_left_next_us = now_us + AR_DELAY_US;
+                visible = (visible <= lo) ? hi : visible - 1;
+                *fp = visible - store_offset;
+                dirty = true;
+            } else if (left && (int32_t)(now_us - ar_left_next_us) >= 0) {
+                ar_left_next_us = now_us + AR_STEP_US;
+                visible = (visible <= lo) ? hi : visible - 1;
+                *fp = visible - store_offset;
+                dirty = true;
+            }
+            if (right && !prev_right) {
+                ar_right_next_us = now_us + AR_DELAY_US;
+                visible = (visible >= hi) ? lo : visible + 1;
+                *fp = visible - store_offset;
+                dirty = true;
+            } else if (right && (int32_t)(now_us - ar_right_next_us) >= 0) {
+                ar_right_next_us = now_us + AR_STEP_US;
+                visible = (visible >= hi) ? lo : visible + 1;
+                *fp = visible - store_offset;
+                dirty = true;
+            }
+        }
+
+        if (a && !prev_a) {
+            /* Commit: zero out seconds + weekday, write to chip.
+             * weekday is rederived from date by the chip / users
+             * generally don't care; bm8563 stores it as-given but
+             * Pokemon doesn't use it. */
+            t.tm_sec = 0;
+            t.tm_wday = 0;
+            (void)thumbyone_rtc_set(&t);
+            return true;
+        }
+        if (b && !prev_b) {
+            return false;
+        }
+
+        if (dirty) render_set_time(&t, cursor);
+
+        prev_up = up; prev_down = down;
+        prev_left = left; prev_right = right;
+        prev_a = a; prev_b = b;
+
+        sleep_ms(8);
+    }
+}
+
+
 static void render_lobby_menu(int cursor) {
     memcpy(g_fb, g_menu_backdrop, sizeof(g_fb));
 
@@ -846,6 +1161,32 @@ static void render_lobby_menu(int cursor) {
         nes_font_draw(g_fb, "fw", 4, y, L_COL_DIM);
         int vw = nes_font_width(val);
         nes_font_draw(g_fb, val, 128 - vw - 4, y, L_COL_TEXT);
+        y += row_h;
+    }
+
+    /* RTC (BM8563) — shows current date / time and opens the set-
+     * time submenu on A. If the chip's low-voltage flag is set the
+     * value is rendered dim with "??:??" so the user knows it's
+     * stale and prompted to set it. */
+    {
+        struct tm rtc;
+        char val[16];
+        uint16_t col = L_COL_TEXT;
+        if (thumbyone_rtc_is_compromised() ||
+            thumbyone_rtc_get(&rtc) != 0) {
+            snprintf(val, sizeof(val), "??:?? SET");
+            col = L_COL_DIM;
+        } else {
+            snprintf(val, sizeof(val), "%02d:%02d %02d/%02d",
+                     rtc.tm_hour, rtc.tm_min,
+                     rtc.tm_mday, rtc.tm_mon + 1);
+        }
+        int cursor_here = (cursor == LMI_TIME);
+        if (cursor_here) fill_row_hl(y, row_h);
+        nes_font_draw(g_fb, "time", 4, y, L_COL_DIM);
+        int vw = nes_font_width(val);
+        nes_font_draw(g_fb, val, 128 - vw - 4, y,
+                      cursor_here ? L_COL_HIGHLT : col);
         y += row_h;
     }
 
@@ -1028,6 +1369,24 @@ static bool lobby_menu_open(void) {
         }
         bool close_menu = false;
         if (a && !prev_a && cursor == LMI_CLOSE) close_menu = true;
+        if (a && !prev_a && cursor == LMI_TIME) {
+            /* Open the SET-TIME submenu. It draws over g_fb, so on
+             * return we re-render the parent menu and update the
+             * "prev" button states from current values to swallow
+             * any d-pad / A presses still held from inside the
+             * submenu (otherwise an A held during the commit would
+             * immediately re-trigger this handler). */
+            (void)lobby_set_time_open();
+            render_lobby_menu(cursor);
+            prev_up = btn_up_pressed();
+            prev_down = btn_down_pressed();
+            prev_left = btn_left_pressed();
+            prev_right = btn_right_pressed();
+            prev_a = btn_a_pressed();
+            prev_b = btn_b_pressed();
+            prev_menu = btn_menu_pressed();
+            continue;
+        }
         if ((b && !prev_b) || (mb && !prev_menu)) close_menu = true;
 
         if (close_menu) {
@@ -1199,6 +1558,9 @@ int main(void) {
      * erase + page programs); there's at most one dirty block in
      * flight, so one drain fully empties the cache. */
     absolute_time_t next_row_check = make_timeout_time_ms(0);
+    /* Clock check fires once per second — minute-resolution display,
+     * so this is plenty responsive without thrashing the I2C bus. */
+    absolute_time_t next_clock_check = make_timeout_time_ms(0);
     #define USB_PUMP() do {                                              \
         lobby_usb_task();                                                \
         if (absolute_time_diff_us(get_absolute_time(), next_row_check)   \
@@ -1209,6 +1571,11 @@ int main(void) {
                 draw_usb_row(st);                                        \
             }                                                            \
             next_row_check = make_timeout_time_ms(100);                  \
+        }                                                                \
+        if (absolute_time_diff_us(get_absolute_time(), next_clock_check) \
+                <= 0) {                                                  \
+            lobby_clock_tick();                                          \
+            next_clock_check = make_timeout_time_ms(1000);               \
         }                                                                \
         if (lobby_usb_cache_dirty()) {                                   \
             uint64_t last = lobby_usb_last_op_us();                      \
