@@ -416,6 +416,11 @@ Boy Color carts that depend on the cart RTC — Pokemon Gold, Silver,
 Crystal — now get correct day-night cycle, time-of-day-only
 encounters, and berry growth.
 
+Game Boy and Game Boy Color audio is significantly cleaner — chord
+passages no longer have the harsh fizz that earlier builds had,
+envelope changes don't pop, and the music no longer speeds up or
+crackles under heavy on-screen load.
+
 #### Polysynth (PSdemo / TinyFreddy)
 
 - **PSdemo and TinyFreddy supported.** The original Thumby's
