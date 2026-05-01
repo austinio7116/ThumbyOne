@@ -78,6 +78,15 @@ if (THUMBYONE_WITH_MD)
     add_compile_definitions(THUMBYONE_WITH_MD=1)
 endif()
 
+# THUMBYNES_YM2612_GENPLUS: pick which YM2612 implementation MD/Genesis
+# uses. OFF = PicoDrive's stock YM2612 (small, fast, MAME-derived).
+# ON = Genesis Plus GX YM2612 (larger; matches RetroArch's GenPlus core
+# audio quality). Forwarded to the NES slot's CMakeLists below where
+# the actual filter / table-generator wiring lives.
+option(THUMBYNES_YM2612_GENPLUS
+    "Use Genesis Plus GX YM2612 (vendored separately) instead of PicoDrive's"
+    OFF)
+
 # THUMBYONE_WITH_PCE: include the PC Engine / TurboGrafx-16 core
 # (HuExpress) in the ThumbyNES slot. Adds ~143 KB of flash on top of
 # MD; with MD+PCE the NES partition lands at ~1.95 MB / 2 MB capacity.
