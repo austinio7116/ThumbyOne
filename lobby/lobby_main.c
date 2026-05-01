@@ -824,7 +824,7 @@ static void draw_thin_bar(int x, int y, int w, int h,
  * but lets standalone-lobby compiles still produce a sensible
  * About-row string). */
 #ifndef THUMBYONE_FW_VERSION
-#define THUMBYONE_FW_VERSION "1.11"
+#define THUMBYONE_FW_VERSION "1.12"
 #endif
 
 /* --- SET TIME submenu --------------------------------------------------

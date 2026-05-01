@@ -51,7 +51,7 @@ set(THUMBYONE_UNIFIED_BUILD ON)
 # DOOM is deliberately excluded — it tracks the ThumbyDOOM port's
 # own versioning ("ThumbyDOOM v1.2"), not ThumbyOne's release
 # cadence.
-set(THUMBYONE_FW_VERSION "1.11")
+set(THUMBYONE_FW_VERSION "1.12")
 add_compile_definitions(THUMBYONE_FW_VERSION="${THUMBYONE_FW_VERSION}")
 
 # ----- Slot selection --------------------------------------------------

@@ -314,7 +314,7 @@ The real deal. Music, sound effects, save games, screen melts, all on a 128×128
 - Full shareware DOOM I (E1M1 – E1M9)
 - 12-bit PWM DAC audio with dithering — OPL2 music (via [emu8950](https://github.com/digital-sound-antiques/emu8950)) + 8-channel ADPCM SFX mixed on core1
 - Save / load to flash (6 save slots)
-- Overlay menu (**MENU long-press**) with brightness, gamma, volume, controls scheme, and cheats (god / all-weapons / no-clip / level warp)
+- Overlay menu (**MENU long-press**) with brightness, gamma, volume, controls scheme (CLASSIC / SOUTHPAW / BA STRAFE), and cheats (god / all-weapons / no-clip / level warp)
 - **Front-LED health indicator** — smooth green → yellow → red blend as HP drops from 100 → 0. Hidden on title / demo; only active during actual gameplay. Gamma-balanced against the Thumby's LED dies (green die is dimmer than red, so "yellow" caps R at ~96/255 for a visually-balanced midpoint).
 - Persistent settings (slot 7) survive power cycles
 
@@ -326,14 +326,25 @@ The real deal. Music, sound effects, save games, screen melts, all on a 128×128
 
 **Controls:**
 
+Three switchable schemes (overlay menu → **Controls**: CLASSIC,
+SOUTHPAW, BA STRAFE). Default is CLASSIC. Common bindings:
+
 | Button | Action |
 |---|---|
-| D-pad | Move / menu navigate |
-| A | Fire / confirm |
-| B | Use / cancel (hold for automap) |
-| B + LB / B + RB | Prev / next weapon |
+| D-pad U/D | Move forward / back |
 | MENU (tap) | Main Menu (Save / Load / Options / Quit Game) |
 | MENU (long-press) | Overlay menu (cheats, gamma, volume, warp) |
+
+Per-scheme bindings:
+
+| | CLASSIC | SOUTHPAW | BA STRAFE |
+|---|---|---|---|
+| D-pad L/R | Turn | Strafe | Turn |
+| LB / RB | Strafe L / R | Turn L / R | **Use** / **Fire** |
+| A | Fire / confirm | Fire / confirm | Strafe right / confirm |
+| B | Use (hold = automap) / cancel | Use (hold = automap) / cancel | Strafe left / cancel |
+| Use **+** trigger | B + LB / B + RB = prev / next weapon | B + LB / B + RB = prev / next weapon | LB + B / LB + A = prev / next weapon |
+| Long-press use | B held → automap | B held → automap | LB held → automap |
 
 ### MicroPython + Tiny Game Engine
 
@@ -399,6 +410,30 @@ See the [1.10 changelog](#110) for the supported feature set and known caveats; 
 ---
 
 ## Changelog
+
+### 1.12
+
+Megadrive / Genesis FM audio sounds cleaner, and every emulator now
+holds its target frame rate steadily instead of drifting below it
+under load.
+
+- **Cleaner Megadrive FM.** ThumbyNES now uses the Genesis Plus GX
+  YM2612 implementation in place of PicoDrive's stock one — the
+  high-frequency hash that sat on top of every Genesis chord is
+  reduced.
+- **All emulators hold the target frame rate.** Fixed a long-standing
+  pacing bug where a frame that ran a little over budget would
+  permanently lose those few milliseconds of schedule, dragging the
+  wall-clock loop rate below the target refresh and starving the
+  audio buffer in lockstep — audible as music playing slightly slow
+  and occasional audio thinning. Affected NES / SMS / PCE / GB / MD;
+  all now lock to their refresh target with no drift.
+- **New DOOM control scheme: BA STRAFE.** A third option in the
+  overlay menu's Controls row, alongside CLASSIC and SOUTHPAW. Moves
+  Fire and Use onto the shoulder buttons (RB / LB) and turns A and
+  B into strafe-right / strafe-left — closer to a modern-FPS layout
+  for players who prefer face buttons for strafing. Selection
+  persists across reboots.
 
 ### 1.11
 
