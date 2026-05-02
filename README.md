@@ -908,6 +908,54 @@ picotool load <path-to-stock>.uf2 -o 0x10000000 -x
 
 The `-o 0x10000000` flag tells picotool exactly where to put the bytes — without it, picotool refuses an `rp2350-arm-s` UF2 with `Family ID 'rp2350-arm-s' cannot be downloaded anywhere` (its own conservative check on movable UF2s when the chip has no partition table to map them onto). With the explicit offset picotool stops trying to interpret the family and just writes the blocks. The `-x` flag executes (boots) the firmware afterwards. Result: device boots stock firmware, no PT in flash, fully back to factory state.
 
+### Switching between WITH_MD=ON and WITH_MD=OFF builds
+
+The two ThumbyOne build variants put the shared FAT at different flash
+offsets and different sizes:
+
+| Build | FAT offset | FAT size |
+|---|---|---|
+| `THUMBYONE_WITH_MD=ON` (default, `firmware_thumbyone.uf2`) | `0x760000` | 8.6 MB |
+| `THUMBYONE_WITH_MD=OFF` (`firmware_thumbyone_nomd.uf2`) | `0x660000` | 9.6 MB |
+
+Flashing one variant on top of the other leaves the old FAT stranded
+at the previous offset — the lobby's mount attempt at the new offset
+finds no valid filesystem, so on first boot you'll see:
+
+```
+FS BAD
+no filesystem
+A=FORMAT  B=ABORT
+```
+
+**Hold A for one second** to confirm the format — the lobby creates
+a fresh FAT at the new offset and continues to the home screen. The
+old FAT's data is unreachable after this; if you had ROMs / saves
+on it, back them up over USB before flashing the layout switch.
+
+**Backup-and-restore round-trip**:
+
+1. Boot the layout you currently have, plug in USB, copy `/roms/` /
+   `/carts/` / `/games/` / `/Saves/` and any hidden files (`/.favs`,
+   `/.volume`, `/.brightness`, `/.active_game`) off the device.
+2. Flash the new layout's UF2.
+3. On first boot, hold **A for one second** at the `FS BAD` prompt
+   to format the new FAT.
+4. Plug in USB and copy as much back as fits — note the WITH_MD=ON
+   ceiling is 1 MB smaller than WITH_MD=OFF, so a near-full 9.6 MB
+   FAT won't restore in full; trim a couple of MB worth of ROMs or
+   bulky MicroPython games first.
+
+**Pressed B at the prompt by accident?** The lobby falls back to an
+`FS ERR / mount failed / LB+RB to wipe` splash. Hold **LB + RB at
+boot** to wipe and reformat — same end result, just the
+LB+RB-confirmation flow instead of A-confirmation.
+
+**Re-flashing the same layout you already have** (e.g. updating
+`firmware_thumbyone.uf2` from one MD-enabled build to a newer one)
+does not show the prompt: the existing FAT mounts as-is and your
+data persists.
+
 ### Other tips
 
 **The picker takes a few seconds to appear after I pick a system.**
