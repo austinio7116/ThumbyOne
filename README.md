@@ -413,14 +413,37 @@ See the [1.10 changelog](#110) for the supported feature set and known caveats; 
 
 ### 1.12
 
-Megadrive / Genesis FM audio sounds cleaner, and every emulator now
-holds its target frame rate steadily instead of drifting below it
-under load.
+In-game saves no longer cause periodic audio stutters and now reach
+flash the moment the cart finishes writing. Megadrive / Genesis FM
+sounds cleaner, and every emulator holds its target frame rate
+steadily instead of drifting below it under load.
 
+- **Cart saves: no more 30 s freezes, immediate persist.** Pre-1.12,
+  every cart-save game (Pokemon Crystal / Gold / Silver, Zelda DX,
+  Sonic 3, Phantasy Star, Final Fantasy, Crystalis, etc.) had a
+  brief audio stutter every 30 s — the autosave timer unconditionally
+  re-wrote the entire .sav file to flash, blocking the audio IRQ
+  during the flash erase + program window. AND if you powered off
+  within that 30 s window after an in-game save, the .sav file still
+  held the previous state. Both fixed:
+  - **No periodic stutter.** The autosave now CRC-hashes the cart's
+    SRAM and only writes when the contents have actually changed.
+    During ordinary gameplay there's no flash activity, no stutter.
+  - **Saves reach flash immediately when the cart is done writing.**
+    Each emulator core watches the cart hardware's RAM-disable
+    register (GB MBC1/3/5, MD SRAM control, NES MMC1/MMC3, SMS
+    SEGA mapper) — real cart silicon flips this register the
+    moment the in-game save sequence finishes, and we use that as
+    the precise trigger to flush to disk. PCE infers the same
+    signal from BRAM write quiescence (HuCards have no clean
+    register transition). Pokemon save → "Saved!" → power off
+    immediately → save persists.
 - **Cleaner Megadrive FM.** ThumbyNES now uses the Genesis Plus GX
   YM2612 implementation in place of PicoDrive's stock one — the
   high-frequency hash that sat on top of every Genesis chord is
-  reduced.
+  reduced. PicoDrive's heap-free `POPT_EN_SNDFILTER` post-mixer
+  EMA low-pass is also enabled to take a few percent off the very
+  top end without veiling mid-range chiptune detail.
 - **All emulators hold the target frame rate.** Fixed a long-standing
   pacing bug where a frame that ran a little over budget would
   permanently lose those few milliseconds of schedule, dragging the
@@ -428,6 +451,13 @@ under load.
   audio buffer in lockstep — audible as music playing slightly slow
   and occasional audio thinning. Affected NES / SMS / PCE / GB / MD;
   all now lock to their refresh target with no drift.
+- **Volume / brightness sliders no longer crater the frame rate.**
+  Adjusting volume or brightness from an emulator's in-game menu
+  used to leave the flash chip in slow safe-mode single-bit read,
+  silently dropping every flash access to a quarter of normal speed
+  until the next reboot. Games would crawl after one slider change.
+  Now the fast-XIP config is re-applied after every settings save,
+  so the slider has zero lasting effect on performance.
 - **New DOOM control scheme: BA STRAFE.** A third option in the
   overlay menu's Controls row, alongside CLASSIC and SOUTHPAW. Moves
   Fire and Use onto the shoulder buttons (RB / LB) and turns A and
@@ -1026,6 +1056,8 @@ Canonical source: [`common/slot_layout.h`](common/slot_layout.h) (preprocessor-s
 
 - Each slot links at `0x10000000` as though it owned the chip. The bootrom's ATRANS remap makes this a lie.
 - On entry, each slot runs `thumbyone_xip_fast_setup()` from RAM. This resets the flash chip (Winbond 66h / 99h reset-enable / reset pair) and reconfigures QMI for fast continuous-read XIP. Without this step, flash left in continuous-read mode from the lobby's boot_stage2 is mis-interpreted when the slot first reconfigures QMI — we tracked an NES blank-screen hang to exactly this for a full day. See [`common/thumbyone_handoff.c`](common/thumbyone_handoff.c) and the memory note at [feedback_rp2350_xip_reset_first.md](https://github.com/austinio7116/ThumbyOne).
+
+- **Re-apply after every flash write (1.12).** The Pico SDK's `flash_range_erase` / `flash_range_program` internally call `rom_flash_enter_cmd_xip`, which leaves QMI in a slow safe-mode single-bit read config. Without re-applying the fast-XIP setup afterwards, every subsequent flash read — including the slot's own code executing in place — runs at roughly a quarter of normal speed until the next reboot. We hit this with the in-game volume / brightness sliders: a single slider tweak silently dropped MD frame rate to ~15 fps. Fix is uniform across every flash writer in the codebase: save ATRANS, do the SDK call, restore ATRANS, then call `thumbyone_xip_fast_setup()`. Both `nes_flash_disk` and `thumbyone_settings` follow this pattern post-1.12.
 
 **Return to lobby:**
 
