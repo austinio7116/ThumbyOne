@@ -49,7 +49,7 @@
  * the MPY slot). The inline fallback below is only used when this
  * picker source is built outside the unified ThumbyOne build. */
 #ifndef THUMBYONE_FW_VERSION
-#define THUMBYONE_FW_VERSION "1.12"
+#define THUMBYONE_FW_VERSION "1.12.1"
 #endif
 
 /* --- button pins (match engine_io_rp3.h) ------------------------- */

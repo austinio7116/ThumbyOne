@@ -411,6 +411,16 @@ See the [1.10 changelog](#110) for the supported feature set and known caveats; 
 
 ## Changelog
 
+### 1.12.1
+
+Patch release. Megadrive volume sounded a touch quiet in 1.12 because
+the post-mixer EMA low-pass we'd added (`POPT_EN_SNDFILTER` at
+`sndFilterAlpha = 0xC000`) shaved a small but audible amount off
+perceived loudness on the 9-bit PWM output. Reverted; the cleaner
+GenPlus YM2612 implementation already handled most of the
+high-frequency hash on its own. Loudness is back to where 1.11 had
+it. No other changes.
+
 ### 1.12
 
 In-game saves no longer cause periodic audio stutters and now reach
