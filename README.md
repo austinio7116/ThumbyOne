@@ -52,7 +52,7 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
 >
 > Flashing ThumbyOne **replaces the stock TinyCircuits firmware** with a completely different system. This is a full takeover, not an overlay:
 >
-> - **The TinyCircuits launcher, stock games, and system files will be gone.** ThumbyOne's shared FAT (8.6 MB in the default MD-enabled build, 9.6 MB with `THUMBYONE_WITH_MD=OFF`) sits at a different flash offset than stock, so the lobby greets you with an **"FS bad"** warning on first boot — hold **LB + RB at boot** to wipe and reformat the volume (one-second countdown, then format proceeds). Anything you had on the device (saves, scores, installed games) is wiped at that point.
+> - **The TinyCircuits launcher, stock games, and system files will be gone.** ThumbyOne's shared FAT (8.6 MB in the default MD-enabled build, 9.6 MB with `THUMBYONE_WITH_MD=OFF`) sits at a different flash offset than stock — first boot will need to format a fresh volume, and anything you had on the device (saves, scores, installed games) is wiped at that point.
 > - The device is easy to flash back to stock afterwards — see instructions below. But stock firmware **doesn't expose a USB drive** — to back up anything from stock first (e.g. save files under `/Saves/`), connect via [Thonny](https://color.thumby.us/pages/getting-started-with-thonny/getting-started-with-thonny/) or `mpremote` and pull files over the REPL. Do that **before** flashing ThumbyOne.
 > - ThumbyOne uses its own filesystem layout (`/roms/`, `/carts/`, `/games/`) — stock `/Games/` Python games won't be visible until you move them into `/games/`.
 > - There is **no going back to stock with your data intact unless you back it up first** once ThumbyOne has first-booted.
@@ -65,7 +65,7 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
 
 **Download** [`firmware_thumbyone.uf2`](https://github.com/austinio7116/ThumbyOne/blob/main/firmware_thumbyone.uf2) from the root of this repo (or the latest [release](https://github.com/austinio7116/ThumbyOne/releases)) — or [build from source](#build-matrix).
 
-> **Already running ThumbyOne 1.04 or earlier, or upgrading from a `THUMBYONE_WITH_MD=OFF` build?** The MD-enabled default build **moves the shared FAT and resizes it from 9.6 MB to 8.6 MB** to make room for Mega Drive / Genesis emulation. The old FAT is invisible at the new offset — the lobby will show **"FS bad"** on first boot. Hold **LB + RB at boot** to wipe and reformat (one-second countdown, then the new FAT is created). Everything on the old volume is wiped. **Back up `/roms/`, `/carts/`, `/games/`, `/Saves/` etc. over USB first** (instructions above in the [1.05 changelog callout](#whats-new-in-105)). After flashing and reformatting, copy back as much as fits — the new ceiling is 8.6 MB.
+> **Already running ThumbyOne 1.04 or earlier, or upgrading from a `THUMBYONE_WITH_MD=OFF` build?** The MD-enabled default build **moves the shared FAT and resizes it from 9.6 MB to 8.6 MB** to make room for Mega Drive / Genesis emulation. The old FAT is invisible at the new offset — the lobby shows an **`FS BAD / A=FORMAT  B=ABORT`** prompt on first boot. **Hold A for one second** to confirm the format; everything on the old volume is wiped. **Back up `/roms/`, `/carts/`, `/games/`, `/Saves/` etc. over USB first** (instructions above in the [1.05 changelog callout](#whats-new-in-105)). After flashing and reformatting, copy back as much as fits — the new ceiling is 8.6 MB.
 >
 > If you don't want Mega Drive / Genesis support, flash a `THUMBYONE_WITH_MD=OFF` build instead — keeps the original 9.6 MB FAT layout so your existing volume mounts untouched. The `firmware_thumbyone_nomd.uf2` file at the repo root is a prebuilt WITH_MD=OFF image.
 
@@ -73,7 +73,7 @@ All four systems share one FAT drive, visible over USB when you're in the lobby.
 2. Hold **DOWN** on the d-pad and plug in USB.
 3. The device appears as an `RPI-RP2350` drive on your computer.
 4. Drag `firmware_thumbyone.uf2` onto it.
-5. The device reboots into ThumbyOne. **First-boot only** (or when migrating from a different `THUMBYONE_WITH_MD` layout): the lobby will show an **"FS bad"** warning because the FAT at the new offset isn't yet valid. Hold **LB + RB at boot** — the lobby prompts you to keep both held for a one-second countdown, then formats the shared FAT. After that the lobby appears as normal.
+5. The device reboots into ThumbyOne. If this is your first time flashing ThumbyOne, or you're switching between WITH_MD=ON and WITH_MD=OFF layouts, the lobby finds no valid FAT at the new offset and shows an `FS BAD / no filesystem / A=FORMAT  B=ABORT` prompt. **Hold A for one second** to confirm the format — the lobby creates the shared FAT and continues to the home screen. Re-flashing the same layout you already have won't show this prompt; the existing FAT mounts as-is.
 
 ### 2. Upload ROMs / carts / games
 
@@ -704,14 +704,14 @@ every emulator core and tidies a couple of PCE labelling misses.
 
 > ### ⚠️ Upgrading from 1.04 or earlier — back up first
 >
-> The 1.05 default build shifts every partition up by 1 MB to make room for the enlarged Mega Drive / Genesis ROM / tables area in the NES slot. The shared FAT therefore moves from `0x660000` (9.6 MB) to `0x760000` (**8.6 MB**) — a different on-disk location AND 1 MB smaller. When you flash 1.05 the lobby sees no valid FAT header at the new offset and shows an **"FS bad"** warning on first boot. Hold **LB + RB at boot** to wipe and reformat — one-second countdown, then the new FAT is created. **Everything on your ThumbyOne USB drive is wiped.**
+> The 1.05 default build shifts every partition up by 1 MB to make room for the enlarged Mega Drive / Genesis ROM / tables area in the NES slot. The shared FAT therefore moves from `0x660000` (9.6 MB) to `0x760000` (**8.6 MB**) — a different on-disk location AND 1 MB smaller. When you flash 1.05 the lobby sees no valid FAT header at the new offset and shows an `FS BAD / A=FORMAT  B=ABORT` prompt on first boot. **Hold A for one second** to confirm the format. **Everything on your ThumbyOne USB drive is wiped.**
 >
 > Back up first, every time:
 > 1. Boot into the 1.04 lobby (or any slot, then back to lobby).
 > 2. Plug in USB — the device enumerates as `ThumbyOne Storage`.
 > 3. Copy everything off — `/roms/`, `/carts/`, `/games/`, `/Saves/`, `/.favs`, `/.active_game`, and the hidden `/.volume` / `/.brightness` settings if you care about those.
-> 4. Eject, unplug, flash 1.05, plug back in. Lobby will say "FS bad".
-> 5. Hold **LB + RB at boot** to format the new 8.6 MB volume.
+> 4. Eject, unplug, flash 1.05, plug back in. Lobby shows `FS BAD / A=FORMAT  B=ABORT`.
+> 5. Hold **A for one second** to format the new 8.6 MB volume.
 > 6. Copy as much back as fits in **8.6 MB**. If you were near-full on 1.04 you'll need to trim something — typically the largest ROMs or a couple of MicroPython games with big assets. The per-slot picker's `Disk` row in the settings menu tells you exactly how full the new FAT is after each write.
 >
 > If you don't need Mega Drive / Genesis support at all, you can skip the migration hassle by building / flashing with `-DTHUMBYONE_WITH_MD=OFF` instead (see the [Build matrix](#build-matrix)). That keeps the original layout (9.6 MB FAT at `0x660000`) and the FAT you already had on 1.04 will mount untouched — no format, no data loss. You just don't get MD.
