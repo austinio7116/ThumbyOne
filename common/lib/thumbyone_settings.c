@@ -34,6 +34,7 @@
 #include "hardware/structs/qmi.h"
 
 #include "slot_layout.h"
+#include "thumbyone_handoff.h"  /* thumbyone_xip_fast_setup */
 
 #define TSM_MAGIC_0  'T'
 #define TSM_MAGIC_1  'S'
@@ -77,11 +78,20 @@ static inline void save_atrans(uint32_t out[4]) {
     out[3] = qmi_hw->atrans[3];
 }
 
-static inline void restore_atrans(const uint32_t in[4]) {
+static inline void restore_atrans_and_xip(const uint32_t in[4]) {
     qmi_hw->atrans[0] = in[0];
     qmi_hw->atrans[1] = in[1];
     qmi_hw->atrans[2] = in[2];
     qmi_hw->atrans[3] = in[3];
+    /* SDK's flash_range_erase / flash_range_program internally call
+     * rom_flash_enter_cmd_xip, which leaves QMI in slow safe-mode
+     * single-bit read. Without restoring fast QPI XIP here, every
+     * flash read after this point — including the slot's own code
+     * that's executing in place — runs 4-8× slower until the next
+     * fast-XIP setup. Frame rate visibly drops in any emulator
+     * runner whose volume/brightness slider triggered this. Same
+     * call as nes_flash_disk's restore path. */
+    thumbyone_xip_fast_setup();
 }
 
 static bool write_pair(uint8_t volume, uint8_t brightness) {
@@ -100,7 +110,7 @@ static bool write_pair(uint8_t volume, uint8_t brightness) {
     save_atrans(saved);
     flash_range_erase(off, FLASH_SECTOR_SIZE);
     flash_range_program(off, page, FLASH_PAGE_SIZE);
-    restore_atrans(saved);
+    restore_atrans_and_xip(saved);
     restore_interrupts(ints);
 
     const volatile uint8_t *p = sector_xip();
