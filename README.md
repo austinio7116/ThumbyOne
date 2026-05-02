@@ -1010,11 +1010,18 @@ ThumbyNES runs cartridges straight out of flash via **XIP** rather than copying 
 
 Trigger it from the ThumbyNES picker menu → **Defragment now**. You get a preview first and nothing is written until you confirm.
 
-**Preview screen** — before/after cluster maps, frag count, largest free contiguous block, total files and bytes. **A** applies, **B** cancels.
+**Preview screen** — before/after cluster maps, frag count, largest free contiguous block, total files and bytes, and the planner's current K weight. **LEFT / RIGHT** on the preview screen tunes K (the trade-off between writes and free-space consolidation); **A** applies, **B** cancels.
 
 <p align="center">
   <img src="docs/screenshots/nes-defrag-preview.png" width="240" alt="Defrag preview — before/after cluster map, A=apply B=cancel">
 </p>
+
+**Variable K weighting** — the planner picks among block-shift configurations (up to 2^16 enumerated; greedy hill-climb above that) by minimising `moves − K × free_consolidation_gain`. K is log-spaced through `0, 1, 2, 3, 5, 8, 13, 25, 50, 100, 200, 500, PACK`:
+
+- **K = 0** — write-minimising. Only moves what must move.
+- **K = 5** (default) — moderate. One contiguous-free cluster gained is worth five writes.
+- **K = 500** — aggressive consolidation. Spends many writes to push every free cluster into one big run at the end of the volume.
+- **PACK** — bypasses the optimiser and runs a guaranteed pack-from-cluster-0 planner. Use when even K = 500 can't reach `frag → 0` on a near-full volume.
 
 **During execution** — clusters move live; the map redraws per file (one hue per file, cycled through a 15-colour palette). A red "DO NOT POWER OFF" banner at the top is mirrored by the front LED going solid red while the FAT is mid-write.
 
@@ -1022,7 +1029,7 @@ Trigger it from the ThumbyNES picker menu → **Defragment now**. You get a prev
   <img src="docs/screenshots/nes-defrag-moving.png" width="240" alt="Defrag running — live cluster map with DO NOT POWER OFF banner and progress counter">
 </p>
 
-The pass does an **in-place cluster-level cycle sort** (same family as Norton SpeedDisk and ext4 `e4defrag`): it plans the target layout first, then cycles each cluster into place using only two cluster-sized RAM buffers — so it works on near-full volumes where a file-level rewrite would need 2× the largest file free. Phases: cluster move, FAT rebuild, directory-entry patch, FatFs remount. A post-pass re-check counts fragmented files against the original to confirm the pass worked.
+The pass does an **in-place cluster-level cycle sort** (same family as Norton SpeedDisk and ext4 `e4defrag`): it plans the target layout first, then cycles each cluster into place using only two cluster-sized RAM buffers (2 KB total on ThumbyOne's 1 KB-cluster FAT). The cycle machinery needs as little as **one free cluster** on disk to operate, so it can compact a 99%-full volume — a file-level rewrite couldn't, since that would need 2× the largest file free at once. Phases: cluster move, FAT rebuild, directory-entry patch, FatFs remount. A post-pass re-check counts fragmented files against the original to confirm the pass worked.
 
 Running it on an already-clean volume is a no-op (preview shows `0 mv`, zero writes).
 
