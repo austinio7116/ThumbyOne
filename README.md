@@ -107,6 +107,8 @@ All the systems share one FAT drive, visible over USB when you're in the lobby. 
 >
 > If you only want a subset of systems and don't need the migration prompt at all, flash one of the slimmer preset UF2s — see [Build matrix](#build-matrix). `firmware_thumbyone_scummonly.uf2` for example gives 15 MB FAT for SCUMM-only setups.
 >
+> **Upgrading to 1.35 (from 1.33 or 1.34)?** Same storage layout — just drag the new `firmware_thumbyone.uf2` on and **everything stays put** (no reformat). 1.35 fixes **big libraries**: the Mote launcher and the on-device gallery used to stop listing after a fixed number of games (the installed grid at 56, the gallery at 40), so once your collection grew past that the newest games silently vanished from the list. Every cap is raised to **128**, so your whole collection shows again. Engine **ABI is unchanged (v47)** — every installed game keeps working untouched.
+>
 > **Upgrading to 1.34 (from 1.32.x or 1.33)?** Same storage layout — just drag the new `firmware_thumbyone.uf2` on and **everything stays put** (no reformat). 1.34 adds engine **ABI v47**, which lets games draw with the engine's own Audiowide font, plus a readable Audiowide multiplayer lobby. The reworked **Grand Thumb Auto** (procedural phone-call contacts, clearer mission markers, legible HUD) and **WolfMote** are rebuilt for v47 and show as **Update available** in the gallery; every other game keeps running unchanged.
 >
 > **Upgrading to 1.33 (from 1.32.x)?** Same storage layout as the previous release — just drag the new `firmware_thumbyone.uf2` on and **everything you already have stays put** (Mote games, ROMs, carts, SCUMM, saves); there's no reformat prompt, and your installed Mote games keep working unchanged. 1.33's headline is the **on-device Mote gallery** — browse, install and *update* Mote games right on the handheld — plus a crisp new interface font across the Mote launcher, gallery and menus. When you open the gallery, the Mote games you already have appear as **Update available** (your older copies predate per-game versions, so the gallery offers to refresh each one in place); games you don't have yet show as **New**.
@@ -840,6 +842,15 @@ style. MENU-hold returns to the lobby. Full manual: the
 [Pilot's Handbook](https://austinio7116.github.io/ThumbyElite/).
 
 ## Changelog
+
+### 1.35.0
+
+**Big-library fix: your whole Mote collection shows again. Once you had more than ~40–56 games, the newest ones silently dropped off the launcher and the on-device gallery — this raises every list cap to 128. A safe drop-in upgrade from 1.33/1.34; nothing on your drive is touched, no reformat, and engine ABI is unchanged (v47).**
+
+* **The Mote launcher lists your whole library.** The installed-games grid was capped at 56 entries — with the gallery now past 57 games, the last one you installed simply never appeared. The cap is now **128**, so every `.mote` in `/mote/` shows.
+* **The on-device gallery shows every game.** Browsing the gallery on the handheld (dock in Studio, press **RB**) was capped at 40 games, so the newest arrivals were cut off the bottom. Now **128** — the full catalogue is browsable and installable on-device.
+* **Mote Studio matches.** The Studio's gallery ceiling is raised to 128 as well, so a large catalogue isn't clipped there either. (Ships in **Mote Studio 0.20-alpha**.)
+* Shows **ONE 1.35.0** in the lobby / **MPY 1.35.0** in the MicroPython picker. No game updates required — this is a firmware-side list fix; every installed game keeps working as-is.
 
 ### 1.32.1
 
