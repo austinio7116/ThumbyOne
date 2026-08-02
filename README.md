@@ -843,6 +843,15 @@ style. MENU-hold returns to the lobby. Full manual: the
 
 ## Changelog
 
+### 1.36.0
+
+**Mote now shares the machine's volume and brightness. Set them once in the lobby and Mote obeys; change them in Mote's own menu and the lobby agrees. A safe drop-in upgrade from 1.35; nothing on your drive is touched, no reformat, and engine ABI is unchanged (v47).**
+
+* **Volume works in Mote.** ThumbyOne keeps one volume for the whole device, and every other slot honoured it — Mote never read it, so it started at its own default however quiet you had set the machine. It reads it at launch now, for both the Mote game list and the games themselves.
+* **Brightness stays in step both ways.** Mote came up at the right brightness already, but its own MENU ▸ BRIGHT slider drove the backlight directly instead of going through the shared driver. Two things went wrong with that: the front LED, which scales itself to the screen brightness, stayed bright on a dimmed screen; and the change was thrown away the moment you left Mote. Now the slider goes through the shared driver, the LED follows, and the value is written back — so the lobby, every other slot and the next Mote session all agree.
+* **Mote's menu shows what the machine is set to.** Opening MENU used to show 100% regardless. It now reads the live shared values, so the sliders start where you actually left them, and writes them back on close — once, and only if you moved something.
+* Shows **ONE 1.36.0** in the lobby / **MPY 1.36.0** in the MicroPython picker. No Mote game updates required.
+
 ### 1.35.0
 
 **ThumbyCraft goes 2-player — co-op over a USB-C cable or over the internet — and your whole Mote library shows again. A safe drop-in upgrade from 1.33/1.34; nothing on your drive is touched, no reformat, and engine ABI is unchanged (v47).**
