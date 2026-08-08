@@ -843,6 +843,29 @@ style. MENU-hold returns to the lobby. Full manual: the
 
 ## Changelog
 
+### 1.36.1
+
+**Indemnity Run's planets and sun are back.** The title screen had become an empty
+starfield with the menu floating over it, and out in the galaxy the worlds you were
+flying towards weren't drawn at all. A safe drop-in upgrade from 1.36; nothing on your
+drive is touched, no reformat, and engine ABI is unchanged (v47).
+
+* **Distant objects stopped drawing.** The Mote engine gives every pixel a 16-bit
+  distance that shrinks the further away a thing is. Past roughly **33 km** it reached
+  zero — and zero is what the engine uses to mean "nothing has been drawn here", so an
+  object that far out lost its own depth test on every one of its pixels and disappeared,
+  while still being on screen, the right size and the right colour. Distances that far
+  now stop at the smallest non-zero value instead, so they draw behind everything else
+  rather than not at all.
+* **Only Indemnity Run was affected**, because only Indemnity Run puts anything that far
+  away: its planets and star are drawn at true distance, millions of kilometres out.
+  Every other game keeps its scene within a few kilometres and never came near the limit —
+  19 of them were captured before and after the change and came out identical to the pixel.
+* **Nothing to reinstall.** The fix is in the engine, which lives in the firmware, so the
+  `.mote` files already in `/mote/` pick it up as soon as you flash. No game needs
+  rebuilding and no save is touched. Ships with **Mote Studio 0.21.1-alpha**, which
+  carries the same fix for the emulator and the Android app.
+
 ### 1.36.0
 
 **Mote now shares the machine's volume and brightness. Set them once in the lobby and Mote obeys; change them in Mote's own menu and the lobby agrees. Released alongside [Mote for Android](https://github.com/austinio7116/mote/releases/latest) — a phone app that plays the whole Mote library, and that your Thumby Color can plug into for online play and gallery downloads over mobile data. A safe drop-in upgrade from 1.35; nothing on your drive is touched, no reformat, and engine ABI is unchanged (v47).**
