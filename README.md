@@ -860,7 +860,7 @@ drive is touched, no reformat, and engine ABI is unchanged (v47).
 * **Only Indemnity Run was affected**, because only Indemnity Run puts anything that far
   away: its planets and star are drawn at true distance, millions of kilometres out.
   Every other game keeps its scene within a few kilometres and never came near the limit —
-  19 of them were captured before and after the change and came out identical to the pixel.
+  18 of them were captured before and after the change and came out identical to the pixel.
 * **Nothing to reinstall.** The fix is in the engine, which lives in the firmware, so the
   `.mote` files already in `/mote/` pick it up as soon as you flash. No game needs
   rebuilding and no save is touched. Ships with **Mote Studio 0.21.1-alpha**, which
